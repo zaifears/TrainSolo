@@ -1,0 +1,38 @@
+{
+    "manifest_version": 3,
+    "name": "TrainSolo Assistant",
+    "version": "1.2.0",
+    "description": "TrainSolo: Railway authentication sync, availability HUD, and one-click seat assistant",
+    "permissions": ["storage", "scripting", "tabs"],
+    "host_permissions": [
+        "https://eticket.railway.gov.bd/*",
+        "*://*.vercel.app/*",
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*",
+        "*://*/*"
+    ],
+    "content_scripts": [
+        {
+            "matches": ["https://eticket.railway.gov.bd/*"],
+            "js": ["content.js"],
+            "css": ["content.css"],
+            "run_at": "document_idle"
+        }
+    ],
+    "action": {
+        "default_popup": "popup.html",
+        "default_title": "TrainSolo Assistant",
+        "default_icon": {
+            "16": "icons/icon-16.png",
+            "32": "icons/icon-32.png",
+            "48": "icons/icon-48.png",
+            "128": "icons/icon-128.png"
+        }
+    },
+    "icons": {
+        "16": "icons/icon-16.png",
+        "32": "icons/icon-32.png",
+        "48": "icons/icon-48.png",
+        "128": "icons/icon-128.png"
+    }
+}

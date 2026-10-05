@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TrainSolo Assistant</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="card">
+        <header class="header">
+            <div class="logo-title">
+                <span class="icon">🚆</span>
+                <h2>TrainSolo</h2>
+            </div>
+            <span id="sessionBadge" class="badge badge-checking">Checking...</span>
+        </header>
+
+        <!-- Railway Status Section -->
+        <section class="section">
+            <div class="section-title">Bangladesh Railway Session</div>
+            <div class="user-info" id="userInfoBox">
+                <div class="user-row">
+                    <span class="label">User:</span>
+                    <span id="userName" class="val">Detecting...</span>
+                </div>
+                <div class="keys-grid">
+                    <div class="key-item">
+                        <span class="key-name">Token</span>
+                        <span id="tokenStatus" class="dot dot-gray"></span>
+                    </div>
+                    <div class="key-item">
+                        <span class="key-name">SSDK</span>
+                        <span id="ssdkStatus" class="dot dot-gray"></span>
+                    </div>
+                    <div class="key-item">
+                        <span class="key-name">UUDID</span>
+                        <span id="uudidStatus" class="dot dot-gray"></span>
+                    </div>
+                </div>
+            </div>
+            <div id="noRailwayPrompt" class="hidden prompt-box">
+                <p>No active railway tab found.</p>
+                <button id="openRailwayBtn" class="btn btn-secondary">Open eticket.railway.gov.bd</button>
+            </div>
+        </section>
+
+        <!-- Instant Ticket Cutter (Hero Action) -->
+        <section class="section action-section">
+            <button id="autoCutBtn" class="btn btn-action" disabled>
+                ⚡ Auto-Cut Seat & Go to OTP
+            </button>
+            <p id="autoCutStatus" class="status-msg"></p>
+        </section>
+
+        <!-- Sync Credentials to Unified Tracker -->
+        <section class="section">
+            <button id="syncBtn" class="btn btn-primary" disabled>
+                🔄 Sync & Open Tracker
+            </button>
+            <p id="statusMsg" class="status-msg"></p>
+        </section>
+
+        <!-- Target Tracker URL Settings -->
+        <section class="section settings-section">
+            <div class="settings-toggle" id="settingsToggle">
+                <span class="subtext">⚙️ Tracker URL (Unified: 5000)</span>
+                <span id="settingsArrow" class="arrow">▼</span>
+            </div>
+            <div id="settingsBox" class="settings-box hidden">
+                <input type="text" id="customTrackerUrl" class="input-text" placeholder="http://localhost:5000" />
+                <button id="saveUrlBtn" class="btn btn-secondary btn-sm">Save</button>
+            </div>
+        </section>
+
+        <footer class="footer">
+            <span id="trackerDetectMsg" class="subtext">Searching for tracker tab...</span>
+        </footer>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

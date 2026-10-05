@@ -1,0 +1,34 @@
+{
+  "cdpEndpoint": "http://127.0.0.1:9222",
+  "railwayHost": "eticket.railway.gov.bd",
+  "journey": {
+    "from": "Dhaka",
+    "to": "Mymensingh",
+    "date": "25-Sep-2026",
+    "trainNames": ["HAWR EXPRESS (777)"],
+    "classes": ["S_CHAIR"],
+    "seatCount": 2
+  },
+  "preferences": {
+    "exactSeats": [],
+    "preferredCoaches": ["KA", "KHA"],
+    "preferWindow": true,
+    "requireAdjacent": true,
+    "allowSameRowFallback": true,
+    "allowSameCoachFallback": true,
+    "allowSeparateFallback": false
+  },
+  "safety": {
+    "dryRun": true,
+    "maximumSeatClickAttempts": 2,
+    "allowContinuePurchase": false,
+    "stopOnSessionExpiry": true,
+    "stopOnJourneyMismatch": true
+  },
+  "logging": {
+    "level": "info",
+    "redactTokens": true,
+    "screenshotsOnFailure": true,
+    "retainDays": 3
+  }
+}

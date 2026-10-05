@@ -1,0 +1,32 @@
+# Node dependencies
+node_modules/
+**/node_modules/
+
+# Environment and sensitive keys
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local budget ledger
+.seat-click-ledger.json
+**/.seat-click-ledger.json
+
+# Build outputs
+dist/
+**/dist/
+build/
+**/build/
+
+# Logs
+*.log
+**/*.log
+npm-debug.log*
+yarn-debug.log*
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
