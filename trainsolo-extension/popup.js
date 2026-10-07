@@ -179,16 +179,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             if (trackerTab) {
                 const urlObj = new URL(trackerTab.url);
-                trackerDetectMsg.textContent = `Tracker Tab Active: ${urlObj.hostname}:${urlObj.port || ''}`;
+                trackerDetectMsg.textContent = `TrainSolo Active: ${urlObj.hostname}:${urlObj.port || ''}`;
                 if (extractedKeys.hasToken) {
                     syncBtn.disabled = false;
-                    syncBtn.textContent = "🔄 Sync & Open Tracker";
+                    syncBtn.textContent = "🔄 Sync & Open TrainSolo";
                 }
             } else {
                 trackerDetectMsg.textContent = `Target: ${targetTrackerUrl}`;
                 if (extractedKeys.hasToken) {
                     syncBtn.disabled = false;
-                    syncBtn.textContent = "🔄 Sync & Open Tracker";
+                    syncBtn.textContent = "🔄 Sync & Open TrainSolo";
                 }
             }
         } catch (e) {}
@@ -196,44 +196,77 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     await findTrackerTab();
 
-    // 5. Sync Button Handler
+    // 5. Sync Button Handler (Resilient Direct URL Navigation + Script Injection)
     syncBtn.addEventListener("click", async () => {
-        statusMsg.textContent = "Syncing credentials...";
+        statusMsg.textContent = "Syncing credentials to TrainSolo...";
+        statusMsg.style.color = "#2563eb";
 
-        if (!trackerTab) {
-            trackerTab = await chrome.tabs.create({ url: targetTrackerUrl });
-            await new Promise(r => setTimeout(r, 2000));
+        if (!extractedKeys.token) {
+            statusMsg.textContent = "❌ No active session found. Please log in on railway site.";
+            statusMsg.style.color = "#dc2626";
+            return;
         }
 
+        // Construct clean token transfer URL
+        let syncUrl;
         try {
-            await chrome.scripting.executeScript({
-                target: { tabId: trackerTab.id },
-                func: (keys) => {
-                    if (keys.token) {
-                        try {
-                            localStorage.setItem("token", keys.token);
-                            if (keys.ssdk) localStorage.setItem("ssdk", keys.ssdk);
-                            if (keys.uudid) localStorage.setItem("uudid", keys.uudid);
-                        } catch (e) {}
-                    }
-                },
-                args: [extractedKeys]
+            syncUrl = new URL(targetTrackerUrl);
+        } catch (_) {
+            syncUrl = new URL("http://localhost:5000");
+        }
+        syncUrl.pathname = "/";
+        syncUrl.searchParams.set("token", extractedKeys.token);
+        if (extractedKeys.ssdk) syncUrl.searchParams.set("ssdk", extractedKeys.ssdk);
+        if (extractedKeys.uudid) syncUrl.searchParams.set("uudid", extractedKeys.uudid);
+        if (extractedKeys.userName) syncUrl.searchParams.set("userName", extractedKeys.userName);
+
+        try {
+            // Fresh tab query
+            const potentialTrackerTabs = await chrome.tabs.query({});
+            trackerTab = potentialTrackerTabs.find(t => {
+                if (!t.url) return false;
+                const url = t.url.toLowerCase();
+                return (
+                    url.includes("localhost:5000") ||
+                    url.includes("127.0.0.1:5000") ||
+                    url.includes("localhost:5173") ||
+                    url.includes("127.0.0.1:5173") ||
+                    url.includes("vercel.app")
+                );
             });
 
-            statusMsg.textContent = "✅ Synced successfully!";
-            statusMsg.style.color = "#16a34a";
-
-            // Reload or redirect tracker
-            await chrome.scripting.executeScript({
-                target: { tabId: trackerTab.id },
-                func: () => {
-                    if (window.location.pathname.includes("/login")) {
-                        window.location.href = "/";
-                    } else {
-                        window.location.reload();
-                    }
+            if (trackerTab) {
+                // Navigate the tab directly to the sync URL (cures any error page / ERR_CONNECTION_REFUSED)
+                await chrome.tabs.update(trackerTab.id, { url: syncUrl.toString(), active: true });
+                if (trackerTab.windowId) {
+                    await chrome.windows.update(trackerTab.windowId, { focused: true });
                 }
-            });
+            } else {
+                trackerTab = await chrome.tabs.create({ url: syncUrl.toString(), active: true });
+            }
+
+            // Also attempt direct localStorage write as a progressive enhancement
+            try {
+                await chrome.scripting.executeScript({
+                    target: { tabId: trackerTab.id },
+                    func: (keys) => {
+                        if (keys.token) {
+                            try {
+                                localStorage.setItem("token", keys.token);
+                                if (keys.ssdk) localStorage.setItem("ssdk", keys.ssdk);
+                                if (keys.uudid) localStorage.setItem("uudid", keys.uudid);
+                                if (keys.userName) localStorage.setItem("userName", keys.userName);
+                            } catch (_) {}
+                        }
+                    },
+                    args: [extractedKeys]
+                });
+            } catch (_) {
+                // If tab was previously showing an error page, chrome.tabs.update is already reloading it cleanly
+            }
+
+            statusMsg.textContent = "✅ Synced successfully! TrainSolo is ready.";
+            statusMsg.style.color = "#16a34a";
         } catch (syncErr) {
             statusMsg.textContent = "❌ Sync failed: " + syncErr.message;
             statusMsg.style.color = "#dc2626";

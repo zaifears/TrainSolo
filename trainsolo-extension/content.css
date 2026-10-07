@@ -144,3 +144,84 @@
     color: #2563eb;
     font-weight: 600;
 }
+
+/* Train Selector in HUD */
+#rail-assistant-hud .hud-train-select {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #0f172a;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    outline: none;
+    cursor: pointer;
+    margin-top: 2px;
+}
+
+#rail-assistant-hud .hud-train-select:focus {
+    border-color: #16a34a;
+    box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.2);
+}
+
+/* Seat Pill Buttons in HUD */
+#rail-assistant-hud .hud-seat-pill-group {
+    display: flex;
+    gap: 4px;
+    margin-top: 2px;
+}
+
+#rail-assistant-hud .hud-seat-pill {
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+#rail-assistant-hud .hud-seat-pill:hover {
+    background: #f1f5f9;
+}
+
+#rail-assistant-hud .hud-seat-pill.active {
+    background: #16a34a;
+    color: #ffffff;
+    border-color: #16a34a;
+    box-shadow: 0 2px 4px rgba(22, 163, 74, 0.25);
+}
+
+/* In-Card Direct Auto-Cut Button */
+.trainsolo-in-card-btn {
+    background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+    color: #ffffff !important;
+    border: 2px solid #ffffff;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin: 8px 0;
+    box-shadow: 0 4px 12px rgba(22, 163, 74, 0.35);
+    transition: all 0.2s ease;
+}
+
+.trainsolo-in-card-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(22, 163, 74, 0.45);
+    background: linear-gradient(135deg, #15803d 0%, #166534 100%);
+}
+
+.trainsolo-in-card-btn:active {
+    transform: translateY(0);
+}
+

@@ -72,6 +72,77 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                     />
                 </div>
             </div>
+
+            {/* Ticket Preferences Row */}
+            <div className="grid md:grid-cols-3 gap-6 mt-5 pt-4 border-t border-blue-100">
+                {/* Seat Count Selector */}
+                <div className="space-y-2">
+                    <Label className="text-gray-700 font-medium flex items-center justify-between">
+                        <span>Passenger Seats Needed</span>
+                        <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded">
+                            {scan.seatCount || 1} { (scan.seatCount || 1) > 1 ? 'Seats' : 'Seat' }
+                        </span>
+                    </Label>
+                    <div className="grid grid-cols-4 gap-2">
+                        {[1, 2, 3, 4].map((count) => {
+                            const isSelected = (scan.seatCount || 1) === count;
+                            return (
+                                <button
+                                    key={count}
+                                    type="button"
+                                    onClick={() => updateField('seatCount', count as any)}
+                                    className={`py-2 text-sm font-bold rounded-lg border transition-all ${
+                                        isSelected
+                                            ? 'bg-[#1ca559] text-white border-[#1ca559] shadow-sm'
+                                            : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                                    }`}
+                                >
+                                    {count}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <p className="text-[11px] text-gray-500">Max 4 seats allowed per Bangladesh Railway rules</p>
+                </div>
+
+                {/* Seat Class Selector */}
+                <div className="space-y-2">
+                    <Label className="text-gray-700 font-medium">
+                        Preferred Seat Class
+                    </Label>
+                    <select
+                        value={scan.seatClass || 'ANY'}
+                        onChange={(e) => updateField('seatClass', e.target.value)}
+                        className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1ca559]"
+                    >
+                        <option value="ANY">🌟 Any Available Class (All)</option>
+                        <option value="S_CHAIR">💺 Shovon Chair (S_CHAIR)</option>
+                        <option value="SNIGDHA">❄️ Snigdha AC Chair (SNIGDHA)</option>
+                        <option value="AC_S">🛋️ AC Seat (AC_S)</option>
+                        <option value="AC_B">🛏️ AC Berth (AC_B)</option>
+                        <option value="SHOVON">🪑 Shovon Non-AC (SHOVON)</option>
+                        <option value="F_BERTH">🛌 First Class Berth (F_BERTH)</option>
+                        <option value="F_SEAT">🎟️ First Class Seat (F_SEAT)</option>
+                        <option value="F_CHAIR">🪑 First Class Chair (F_CHAIR)</option>
+                    </select>
+                    <p className="text-[11px] text-gray-500">Scanner only alerts you for this specific class</p>
+                </div>
+
+                {/* Preferred Train Filter (Optional) */}
+                <div className="space-y-2">
+                    <Label className="text-gray-700 font-medium">
+                        Preferred Train (Optional)
+                    </Label>
+                    <input
+                        type="text"
+                        value={scan.preferredTrain || ''}
+                        onChange={(e) => updateField('preferredTrain', e.target.value)}
+                        placeholder="e.g. Tista, Parjotak, Ekota (Leave blank for all)"
+                        className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1ca559]"
+                    />
+                    <p className="text-[11px] text-gray-500">Leave blank to monitor every train on this route</p>
+                </div>
+            </div>
         </div>
     );
 };

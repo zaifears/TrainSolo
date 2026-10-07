@@ -4,12 +4,15 @@ import Heading from '@/components/shared/Heading';
 import { Button } from '@/components/ui/button';
 import { HiSparkles } from 'react-icons/hi';
 import { FiLogOut, FiUser } from 'react-icons/fi';
-import { BsInfoCircleFill } from 'react-icons/bs';
 import toast from 'react-hot-toast';
 import useTicketContext from '@/hooks/useTicketContext';
 import { useNavigate } from 'react-router';
 import axiosInstance from '@/helpers/axiosInstance';
-import { removeFromLocalStorage } from '@/utils/localStorage';
+import {
+    getFromLocalStorage,
+    setToLocalStorage,
+    removeFromLocalStorage,
+} from '@/utils/localStorage';
 
 const StationInput = () => {
     const [name, setName] = useState('');
@@ -18,27 +21,33 @@ const StationInput = () => {
     const navigate = useNavigate();
 
     useEffect(() => {
+        const token = getFromLocalStorage('token');
+        const ssdk = getFromLocalStorage('ssdk');
+        const uudid = getFromLocalStorage('uudid');
+
+        if (!token || !ssdk || !uudid) {
+            setIsVerifying(false);
+            navigate('/login');
+            return;
+        }
+
+        // Credentials present! Establish active session immediately
+        const cachedName = getFromLocalStorage('userName') || 'Bangladesh Railway User';
+        setName(cachedName);
+        setIsVerifying(false);
+
+        // Fetch fresh profile in the background without gatekeeping the app
         axiosInstance
             .get('/users/profile')
             .then((res) => {
-                setName(res.data.data.name || 'User');
-                setIsVerifying(false);
+                if (res.data?.data?.name) {
+                    setName(res.data.data.name);
+                    setToLocalStorage('userName', res.data.data.name);
+                }
             })
             .catch((error) => {
-                console.error(error.message);
-                removeFromLocalStorage('token');
-                removeFromLocalStorage('ssdk');
-                removeFromLocalStorage('uudid');
-                setIsVerifying(false);
-                navigate('/login');
-                toast('Please Login to Scan Tickets', {
-                    icon: (
-                        <BsInfoCircleFill
-                            size={18}
-                            className="text-[#3498db]"
-                        />
-                    ),
-                });
+                console.warn('Background profile check note:', error.message);
+                // Keep session intact so ticket scanning and booking are never interrupted!
             });
     }, [navigate]);
 
@@ -49,6 +58,9 @@ const StationInput = () => {
                     from: '',
                     to: '',
                     date: undefined,
+                    seatClass: 'ANY',
+                    seatCount: 1,
+                    preferredTrain: '',
                 },
             ]);
         }

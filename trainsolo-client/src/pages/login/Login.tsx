@@ -9,13 +9,23 @@ const Login = () => {
     const navigate = useNavigate();
 
     useEffect(() => {
-        const token = getFromLocalStorage('token');
-        const ssdk = getFromLocalStorage('ssdk');
-        const uudid = getFromLocalStorage('uudid');
+        const checkAuth = () => {
+            const token = getFromLocalStorage('token');
+            const ssdk = getFromLocalStorage('ssdk');
+            const uudid = getFromLocalStorage('uudid');
 
-        if (token && ssdk && uudid) {
-            navigate('/input-count');
-        }
+            if (token && ssdk && uudid) {
+                navigate('/');
+            }
+        };
+
+        checkAuth();
+        window.addEventListener('storage', checkAuth);
+        const timer = setInterval(checkAuth, 600);
+        return () => {
+            window.removeEventListener('storage', checkAuth);
+            clearInterval(timer);
+        };
     }, [navigate]);
 
     return (
@@ -30,7 +40,7 @@ const Login = () => {
                         Get Started in 2 Simple Steps
                     </h2>
                     <p className="text-sm text-gray-500">
-                        Install our Chrome extension and sync your Rail Sheba
+                        Use the TrainSolo Assistant extension to sync your Bangladesh Railway
                         account in one click.
                     </p>
                 </div>
@@ -42,11 +52,10 @@ const Login = () => {
                         </div>
                         <div>
                             <p className="text-sm font-medium text-gray-700">
-                                Install the Chrome Extension
+                                Load TrainSolo Extension
                             </p>
                             <p className="text-xs text-gray-500">
-                                Click the button below to install the Chrome
-                                extension from GitHub.
+                                Load the trainsolo-extension unpacked in your Chrome or Brave extensions menu.
                             </p>
                         </div>
                     </div>
@@ -57,23 +66,22 @@ const Login = () => {
                         </div>
                         <div>
                             <p className="text-sm font-medium text-gray-700">
-                                Sync Your Account
+                                Sync Your Railway Account
                             </p>
                             <p className="text-xs text-gray-500">
-                                Open the extension and click "Sync Account".
-                                Your account will sync automatically.
+                                Log in to eticket.railway.gov.bd, open the extension, and click "Sync & Open TrainSolo".
                             </p>
                         </div>
                     </div>
                 </div>
                 <Link
-                    to="https://github.com/SazidulAlam47/train-ticket-tracker-sync-extension"
+                    to="/instructions/pc-instructions.jpg"
                     target="_blank"
                     className="block"
                 >
                     <Button className="w-full text-base cursor-pointer bg-[#1ca559] hover:bg-[#167457]">
                         <FaChrome className="text-lg" />
-                        Install Chrome Extension
+                        View Extension Setup Guide
                     </Button>
                 </Link>
             </div>

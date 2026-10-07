@@ -1,4 +1,4 @@
-# Production Dockerfile for Train Ticket Tracker Server
+# Production Dockerfile for TrainSolo Unified Server
 FROM node:20-alpine AS builder
 
 WORKDIR /app

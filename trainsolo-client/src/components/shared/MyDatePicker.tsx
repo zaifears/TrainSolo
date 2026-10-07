@@ -11,13 +11,6 @@ import {
 import moment from 'moment-timezone';
 import type { Dispatch, SetStateAction } from 'react';
 
-const todayInDhaka = moment.tz('Asia/Dhaka').startOf('day').toDate();
-const maxDateInDhaka = moment
-    .tz('Asia/Dhaka')
-    .add(10, 'days')
-    .endOf('day')
-    .toDate();
-
 type TMyDatePicker = {
     date: Date | undefined;
     setDate: Dispatch<SetStateAction<Date | undefined>>;
@@ -25,6 +18,12 @@ type TMyDatePicker = {
 
 const MyDatePicker = ({ date, setDate }: TMyDatePicker) => {
     const [open, setOpen] = useState(false);
+    const todayInDhaka = moment.tz('Asia/Dhaka').startOf('day').toDate();
+    const maxDateInDhaka = moment
+        .tz('Asia/Dhaka')
+        .add(10, 'days')
+        .endOf('day')
+        .toDate();
 
     const handleSelect = (selectedDate: Date | undefined) => {
         if (selectedDate) {

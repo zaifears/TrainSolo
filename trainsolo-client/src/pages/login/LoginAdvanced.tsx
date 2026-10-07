@@ -15,13 +15,23 @@ const LoginAdvanced = () => {
     const navigate = useNavigate();
 
     useEffect(() => {
-        const token = getFromLocalStorage('token');
-        const ssdk = getFromLocalStorage('ssdk');
-        const uudid = getFromLocalStorage('uudid');
+        const checkAuth = () => {
+            const token = getFromLocalStorage('token');
+            const ssdk = getFromLocalStorage('ssdk');
+            const uudid = getFromLocalStorage('uudid');
 
-        if (token && ssdk && uudid) {
-            navigate('/input-count');
-        }
+            if (token && ssdk && uudid) {
+                navigate('/');
+            }
+        };
+
+        checkAuth();
+        window.addEventListener('storage', checkAuth);
+        const timer = setInterval(checkAuth, 600);
+        return () => {
+            window.removeEventListener('storage', checkAuth);
+            clearInterval(timer);
+        };
     }, [navigate]);
 
     const handleLogin = async (data: FieldValues) => {
@@ -127,7 +137,7 @@ const LoginAdvanced = () => {
                     to="/login"
                     className="font-semibold text-[#178b4c] hover:text-[#107a40] hover:underline"
                 >
-                    Use Chrome Extension
+                    Use TrainSolo Extension
                 </Link>{' '}
                 for one-click login.
             </p>

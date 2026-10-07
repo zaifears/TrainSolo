@@ -24,7 +24,15 @@ const getUserProfile = async (
             },
         });
     } catch (err: any) {
-        throw new ApiError(err.status, err.message);
+        const statusCode =
+            err.response?.status ||
+            err.statusCode ||
+            status.INTERNAL_SERVER_ERROR;
+        const message =
+            err.response?.data?.message ||
+            err.message ||
+            'Error communicating with Shohoz';
+        throw new ApiError(statusCode, message);
     }
 
     const shohozApiResponse = axiosResponse.data;

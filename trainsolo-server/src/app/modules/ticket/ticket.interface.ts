@@ -72,6 +72,7 @@ export type TSearchTicketPayload = z.infer<
 
 export type TMyResponse = {
     trainName: string;
+    trainNumber?: string;
     departureDateTime: string;
     arrivalDateTime: string;
     travelTime: string;

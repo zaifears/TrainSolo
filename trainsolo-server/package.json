@@ -8,7 +8,8 @@
         "start": "node dist/server.js",
         "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
         "lint": "eslint src/ --fix",
-        "format": "prettier --ignore-path .gitignore --write \"src/**/*.+(ts|json)\"  \"*.+(mjs|json)\""
+        "format": "prettier --ignore-path .gitignore --write \"src/**/*.+(ts|json)\"  \"*.+(mjs|json)\"",
+        "test": "vitest run"
     },
     "keywords": [],
     "author": "",
@@ -36,6 +37,7 @@
         "globals": "^16.1.0",
         "prettier": "^3.5.3",
         "typescript": "^5.8.3",
-        "typescript-eslint": "^8.32.1"
+        "typescript-eslint": "^8.32.1",
+        "vitest": "^5.0.3"
     }
 }

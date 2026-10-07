@@ -13,10 +13,19 @@
     ],
     "content_scripts": [
         {
+            "matches": [
+                "http://localhost:*/*",
+                "http://127.0.0.1:*/*",
+                "*://*.vercel.app/*"
+            ],
+            "js": ["tracker-bridge.js"],
+            "run_at": "document_idle"
+        },
+        {
             "matches": ["https://eticket.railway.gov.bd/*"],
             "js": ["content.js"],
             "css": ["content.css"],
-            "run_at": "document_idle"
+            "run_at": "document_start"
         }
     ],
     "action": {

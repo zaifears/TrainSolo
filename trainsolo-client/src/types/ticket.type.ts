@@ -6,6 +6,7 @@ export type TApiResponse = {
 
 export interface ITicket {
     trainName: string;
+    trainNumber?: string;
     departureDateTime: string;
     arrivalDateTime: string;
     travelTime: string;

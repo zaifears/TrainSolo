@@ -29,19 +29,20 @@ const newTicketToast = (ticket: ITicket) => {
             </div>
         ),
         {
+            id: 'trainsolo-ticket-alert',
             position: 'bottom-right',
             duration: 8000,
             style: {
                 width: 'auto',
-                maxWidth: 'none',
+                maxWidth: '400px',
                 padding: '12px 18px',
-                borderRadius: '8px',
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+                borderRadius: '12px',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.15)',
                 fontSize: '14px',
-                backgroundColor: '#f5f5f5',
-                border: '1px solid #ddd',
+                backgroundColor: '#ffffff',
+                border: '2px solid #10b981',
             },
-            icon: <FaTrainSubway color="#164973" size={20} />,
+            icon: <FaTrainSubway color="#10b981" size={24} />,
         },
     );
 

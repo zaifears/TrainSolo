@@ -44,6 +44,12 @@ const TicketTable = () => {
     const ticketsObjRef = useRef(ticketsObj);
     ticketsObjRef.current = ticketsObj;
 
+    // Live Bangladesh Standard Time clock and 7:59:58 AM precision trigger
+    const [bstClock, setBstClock] = useState('');
+    const [secondsTo8Am, setSecondsTo8Am] = useState<number | null>(null);
+    const [isBurstActive, setIsBurstActive] = useState(false);
+    const inBurstRef = useRef(false);
+
     // Redirect to setup if no scans configured
     useEffect(() => {
         if (!scans || !scans.length) {
@@ -70,12 +76,18 @@ const TicketTable = () => {
                             from: scan.from,
                             to: scan.to,
                             date: formatDate,
+                            seatClass: scan.seatClass,
+                            seatCount: scan.seatCount,
+                            preferredTrain: scan.preferredTrain,
                         });
 
                         const newTickets = (res.data.data || []) as ITicket[];
                         const currentOldTickets = [
                             ...(ticketsObjRef.current[key] || []),
                         ];
+
+                        let newlyFound = false;
+                        let bestFound: ITicket | null = null;
 
                         newTickets.forEach((newTicket) => {
                             const matchOldTicket = currentOldTickets.find(
@@ -88,15 +100,24 @@ const TicketTable = () => {
                                 matchOldTicket &&
                                 newTicket.seats > matchOldTicket.seats
                             ) {
-                                notificationAudio.current.play();
-                                newTicketToast(newTicket);
+                                newlyFound = true;
+                                if (!bestFound || newTicket.seats > bestFound.seats) {
+                                    bestFound = newTicket;
+                                }
                             }
-                            if (!matchOldTicket) {
+                            if (!matchOldTicket && newTicket.seats > 0) {
                                 currentOldTickets.push(newTicket);
-                                notificationAudio.current.play();
-                                newTicketToast(newTicket);
+                                newlyFound = true;
+                                if (!bestFound || newTicket.seats > bestFound.seats) {
+                                    bestFound = newTicket;
+                                }
                             }
                         });
+
+                        if (newlyFound && bestFound) {
+                            try { notificationAudio.current.play(); } catch (_) {}
+                            newTicketToast(bestFound);
+                        }
 
                         currentOldTickets.forEach((oldTicket) => {
                             const newTicketMatch = newTickets.find(
@@ -129,7 +150,6 @@ const TicketTable = () => {
                                       .response.data.message
                                 : 'Shohoz server busy (retrying...)';
                         setLastErrorMsg(message);
-                        // Crucial: Do NOT navigate away on error! Keep scanning.
                     }
                 }),
             );
@@ -147,9 +167,50 @@ const TicketTable = () => {
         fetchAllTickets();
     }, [fetchAllTickets]);
 
+    // Live clock ticker & 7:59:58 AM precision trigger
+    useEffect(() => {
+        const timer = setInterval(() => {
+            const now = moment().tz('Asia/Dhaka');
+            setBstClock(now.format('hh:mm:ss A'));
+
+            const hours = now.hours();
+            const minutes = now.minutes();
+            const seconds = now.seconds();
+
+            // Calculate seconds to 8:00:00 AM (if between 7:50 and 8:00)
+            if (hours === 7 && minutes >= 50) {
+                const diff = (60 - minutes - 1) * 60 + (60 - seconds);
+                setSecondsTo8Am(diff);
+            } else if (hours === 8 && minutes === 0 && seconds <= 15) {
+                setSecondsTo8Am(0);
+            } else {
+                setSecondsTo8Am(null);
+            }
+
+            // High-Speed Precision Burst at 07:59:58 to 08:00:10 AM
+            const isBurstWindow =
+                (hours === 7 && minutes === 59 && seconds >= 58) ||
+                (hours === 8 && minutes === 0 && seconds <= 10);
+
+            if (isBurstWindow) {
+                setIsBurstActive(true);
+                inBurstRef.current = true;
+                if (!isFetching) {
+                    fetchAllTickets();
+                }
+            } else {
+                setIsBurstActive(false);
+                inBurstRef.current = false;
+            }
+        }, 500);
+
+        return () => clearInterval(timer);
+    }, [fetchAllTickets, isFetching]);
+
     // Automatic countdown & polling interval
     useEffect(() => {
         const interval = setInterval(() => {
+            if (inBurstRef.current) return;
             setCountdown((prev) => {
                 if (prev <= 1) {
                     fetchAllTickets();
@@ -235,13 +296,83 @@ const TicketTable = () => {
         setTicketsObj(filteredTicketsObj);
     };
 
+    const neededSeats = scans[0]?.seatCount || 1;
+    const requestedClass =
+        scans[0]?.seatClass && scans[0]?.seatClass !== 'ANY'
+            ? scans[0]?.seatClass
+            : null;
+
     const ticketsArray: ITicket[] = Object.values(ticketsObj).flat();
+    const ticketsWithSufficientSeats = ticketsArray.filter(
+        (t) => t.seats >= neededSeats,
+    );
+    const availableTickets = ticketsArray.filter((t) => t.seats > 0);
+    const topAvailableTicket =
+        ticketsWithSufficientSeats.length > 0
+            ? [...ticketsWithSufficientSeats].sort((a, b) => b.seats - a.seats)[0]
+            : availableTickets.length > 0
+              ? [...availableTickets].sort((a, b) => b.seats - a.seats)[0]
+              : null;
+
     const activeRoute = scans[0]
         ? `${scans[0].from} ➔ ${scans[0].to} (${scans[0].date ? formatDateToStr(scans[0].date) : ''})`
         : 'Active Journey';
 
+    const syncTargetToExtension = (ticket: ITicket) => {
+        const payload = {
+            train: ticket.trainName,
+            train_number: ticket.trainNumber || (ticket.trainName.match(/\b\d{3,4}\b/) || [])[0] || '',
+            seats: neededSeats,
+            class: ticket.class,
+            from: ticket.from,
+            to: ticket.to,
+            date: scans[0]?.date ? formatDateToStr(scans[0].date) : '',
+            autocut: true,
+            timestamp: Date.now(),
+        };
+        try {
+            localStorage.setItem('trainsolo_booking_target', JSON.stringify(payload));
+            window.dispatchEvent(new CustomEvent('trainsolo:sync-target', { detail: payload }));
+        } catch (_) {}
+    };
+
     return (
         <div className="min-h-[90dvh] max-w-5xl mx-auto space-y-4">
+            {/* Live Bangladesh Railway Clock & 8:00 AM Drop Synchronizer */}
+            <div className="bg-slate-900 text-white px-5 py-3.5 rounded-2xl shadow-lg border border-slate-700 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                    <span className="text-2xl animate-pulse">🕒</span>
+                    <div>
+                        <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">
+                            Bangladesh Standard Time (BST)
+                        </div>
+                        <div className="text-lg font-mono font-bold text-emerald-400">
+                            {bstClock || moment().format('hh:mm:ss A')}
+                        </div>
+                    </div>
+                </div>
+
+                {secondsTo8Am !== null ? (
+                    <div className="flex items-center gap-2.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 px-4 py-2 rounded-xl font-bold text-sm shadow-inner">
+                        <span>🎯 8:00 AM Ticket Drop in:</span>
+                        <span className="font-mono text-base text-amber-200 font-black">
+                            {secondsTo8Am === 0 ? 'DROP IS LIVE!' : `${secondsTo8Am}s`}
+                        </span>
+                    </div>
+                ) : (
+                    <div className="text-xs text-slate-300 bg-slate-800 px-3.5 py-1.5 rounded-xl border border-slate-700">
+                        ⏰ Smart Drop Burst armed for <strong className="text-emerald-400">07:59:58 AM</strong>
+                    </div>
+                )}
+
+                {isBurstActive && (
+                    <div className="bg-red-600 text-white px-4 py-1.5 rounded-xl text-xs font-black animate-bounce shadow-xl flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                        8:00 AM HIGH-SPEED BURST SCANNING ACTIVE
+                    </div>
+                )}
+            </div>
+
             {/* Header Status Bar */}
             <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -253,9 +384,17 @@ const TicketTable = () => {
                                 <ImSpinner9 className="animate-spin text-emerald-600 text-sm" />
                             )}
                         </h2>
-                        <p className="text-xs text-gray-500">
-                            Route: <span className="font-semibold text-gray-700">{activeRoute}</span>
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 mt-0.5">
+                            <span>Route: <strong className="text-gray-700">{activeRoute}</strong></span>
+                            <span>•</span>
+                            <span>Needed: <strong className="text-emerald-700 font-bold">{neededSeats} {neededSeats > 1 ? 'Seats' : 'Seat'}</strong></span>
+                            {requestedClass && (
+                                <>
+                                    <span>•</span>
+                                    <span>Class: <strong className="text-blue-700 font-semibold">{requestedClass}</strong></span>
+                                </>
+                            )}
+                        </div>
                     </div>
                 </div>
 
@@ -273,6 +412,39 @@ const TicketTable = () => {
                     )}
                 </div>
             </div>
+
+            {/* HERO DIRECT ONE-CLICK AUTO-CUT CARD (When tickets are available) */}
+            {topAvailableTicket && (
+                <div className="bg-gradient-to-r from-emerald-600 via-emerald-700 to-green-800 text-white p-5 sm:p-6 rounded-2xl shadow-xl border-2 border-emerald-400 flex flex-col md:flex-row items-center justify-between gap-5 transition-all">
+                    <div className="space-y-1.5 text-center md:text-left">
+                        <div className="inline-flex items-center gap-2 bg-emerald-950/50 text-emerald-200 text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full border border-emerald-400/40">
+                            <span>⚡ TOP AVAILABLE MATCH</span>
+                            <span>•</span>
+                            <span>{topAvailableTicket.seats} Seats in Inventory</span>
+                        </div>
+                        <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow">
+                            {topAvailableTicket.trainName} • <span className="text-amber-300">{topAvailableTicket.class}</span>
+                        </h2>
+                        <p className="text-sm text-emerald-100 font-medium">
+                            {topAvailableTicket.from} ➔ {topAvailableTicket.to} • Departs {topAvailableTicket.departureDateTime} • ৳{topAvailableTicket.fare}
+                        </p>
+                    </div>
+                    <a
+                        href={`${topAvailableTicket.link}#autocut=1`}
+                        onClick={() => syncTargetToExtension(topAvailableTicket)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full md:w-auto"
+                    >
+                        <Button
+                            size="lg"
+                            className="w-full md:w-auto text-base sm:text-lg font-black bg-amber-400 hover:bg-amber-300 text-gray-900 shadow-2xl px-8 py-7 rounded-xl cursor-pointer hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2 border-2 border-white/40"
+                        >
+                            ⚡ AUTO-CUT & GO TO OTP NOW ⚡
+                        </Button>
+                    </a>
+                </div>
+            )}
 
             {/* Action Buttons Toolbar */}
             <div className="flex flex-wrap gap-2.5 justify-center">
@@ -360,27 +532,42 @@ const TicketTable = () => {
                 <div className="bg-white px-4 py-3 rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
                     <Table>
                         <TableHeader>
-                            <TableRow className="text-sm">
-                                <TableHead>From</TableHead>
-                                <TableHead>To</TableHead>
-                                <TableHead>Departure</TableHead>
+                            <TableRow className="text-sm bg-gray-50/70">
+                                <TableHead className="w-[180px] font-bold text-emerald-800 bg-emerald-50/80">
+                                    ⚡ One-Click Action
+                                </TableHead>
                                 <TableHead>Train Name</TableHead>
                                 <TableHead>Class</TableHead>
                                 <TableHead>Seats</TableHead>
+                                <TableHead>Departure</TableHead>
                                 <TableHead>Fare</TableHead>
+                                <TableHead>From ➔ To</TableHead>
                                 <TableHead>Found At</TableHead>
-                                <TableHead className="w-[1%] text-right">
-                                    Instant Booking
-                                </TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {ticketsArray.map((ticket, index) => (
-                                <TableRow key={index} className="h-11">
-                                    <TableCell className="font-medium">{ticket.from}</TableCell>
-                                    <TableCell>{ticket.to}</TableCell>
-                                    <TableCell>{ticket.departureDateTime}</TableCell>
-                                    <TableCell className="font-semibold text-gray-900">
+                                <TableRow key={index} className="h-12 hover:bg-gray-50">
+                                    <TableCell className="bg-emerald-50/40 font-medium">
+                                        {ticket.seats ? (
+                                            <a
+                                                href={`${ticket.link}#autocut=1`}
+                                                onClick={() => syncTargetToExtension(ticket)}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                            >
+                                                <Button
+                                                    size="sm"
+                                                    className="cursor-pointer bg-[#16a34a] hover:bg-[#15803d] text-white font-bold flex items-center gap-1.5 shadow-sm whitespace-nowrap text-xs px-3 py-1.5"
+                                                >
+                                                    ⚡ Auto-Cut & OTP
+                                                </Button>
+                                            </a>
+                                        ) : (
+                                            <span className="text-xs text-gray-400 italic">Sold out</span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell className="font-bold text-gray-900">
                                         {ticket.trainName}
                                     </TableCell>
                                     <TableCell>
@@ -390,7 +577,7 @@ const TicketTable = () => {
                                     </TableCell>
                                     <TableCell>
                                         <span
-                                            className={`font-bold ${
+                                            className={`font-black text-sm ${
                                                 ticket.seats > 0
                                                     ? 'text-emerald-600'
                                                     : 'text-gray-400'
@@ -399,27 +586,17 @@ const TicketTable = () => {
                                             {ticket.seats}
                                         </span>
                                     </TableCell>
-                                    <TableCell>৳ {ticket.fare}</TableCell>
-                                    <TableCell className="text-xs text-gray-500">
-                                        {moment(ticket.now).format('h:mm:ss a')}
+                                    <TableCell className="text-xs font-medium text-gray-700">
+                                        {ticket.departureDateTime}
                                     </TableCell>
-                                    <TableCell className="w-[1%] text-right">
-                                        {ticket.seats ? (
-                                            <a
-                                                href={`${ticket.link}#autocut=1`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                            >
-                                                <Button
-                                                    size="sm"
-                                                    className="cursor-pointer bg-[#16a34a] hover:bg-[#15803d] text-white font-semibold flex items-center gap-1 shadow-sm whitespace-nowrap"
-                                                >
-                                                    ⚡ Auto-Cut & OTP
-                                                </Button>
-                                            </a>
-                                        ) : (
-                                            <span className="text-xs text-gray-400">Sold out</span>
-                                        )}
+                                    <TableCell className="font-semibold text-gray-800">
+                                        ৳ {ticket.fare}
+                                    </TableCell>
+                                    <TableCell className="text-xs text-gray-600">
+                                        {ticket.from} ➔ {ticket.to}
+                                    </TableCell>
+                                    <TableCell className="text-xs text-gray-400">
+                                        {moment(ticket.now).format('h:mm:ss a')}
                                     </TableCell>
                                 </TableRow>
                             ))}

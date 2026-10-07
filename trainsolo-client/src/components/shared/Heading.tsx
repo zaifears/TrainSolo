@@ -12,7 +12,7 @@ const Heading = ({ className }: THeadingProps) => {
                 className,
             )}
         >
-            Train Ticket Tracker
+            TrainSolo
         </h1>
     );
 };

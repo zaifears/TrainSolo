@@ -7,8 +7,8 @@ const stationNameSchema = z
     .min(2, 'Station name must be at least 2 characters')
     .max(60, 'Station name must not exceed 60 characters')
     .regex(
-        /^[A-Za-z0-9\s\-()]+$/,
-        'Station name may only contain alphanumeric characters, spaces, hyphens, and parentheses',
+        /^[A-Za-z0-9\s\-_'().]+$/,
+        'Station name may only contain alphanumeric characters, spaces, hyphens, underscores, apostrophes, and parentheses',
     );
 
 const searchTickets = z.object({
@@ -34,6 +34,9 @@ const searchTickets = z.object({
                     'Date must be between today and 10 days from now (Asia/Dhaka timezone)',
             },
         ),
+    seatClass: z.string().trim().optional(),
+    seatCount: z.number().int().min(1).max(4).optional(),
+    preferredTrain: z.string().trim().optional(),
 });
 
 export const TicketValidations = {
