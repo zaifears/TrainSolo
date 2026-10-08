@@ -21,7 +21,6 @@ const TicketProvider = ({ children }: { children: ReactNode }) => {
         } catch (_) {}
         return [{ from: '', to: '', date: undefined }];
     });
-    const [inputCount, setInputCount] = useState(() => scans.length || 1);
 
     useEffect(() => {
         try {
@@ -32,8 +31,6 @@ const TicketProvider = ({ children }: { children: ReactNode }) => {
     const value = {
         scans,
         setScans,
-        inputCount,
-        setInputCount,
     };
 
     return (

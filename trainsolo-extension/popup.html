@@ -49,7 +49,7 @@
             <button id="autoCutBtn" class="btn btn-action" disabled>
                 ⚡ Auto-Cut Seat & Go to OTP
             </button>
-            <p id="autoCutStatus" class="status-msg"></p>
+            <p id="autoCutStatus" class="status-msg" role="status" aria-live="polite"></p>
         </section>
 
         <!-- Sync Credentials to Unified Tracker -->
@@ -57,15 +57,15 @@
             <button id="syncBtn" class="btn btn-primary" disabled>
                 🔄 Sync & Open TrainSolo
             </button>
-            <p id="statusMsg" class="status-msg"></p>
+            <p id="statusMsg" class="status-msg" role="status" aria-live="polite"></p>
         </section>
 
         <!-- Target Tracker URL Settings -->
         <section class="section settings-section">
-            <div class="settings-toggle" id="settingsToggle">
+            <button type="button" class="settings-toggle" id="settingsToggle" aria-expanded="false" aria-controls="settingsBox">
                 <span class="subtext">⚙️ TrainSolo URL (Unified: 5000)</span>
                 <span id="settingsArrow" class="arrow">▼</span>
-            </div>
+            </button>
             <div id="settingsBox" class="settings-box hidden">
                 <input type="text" id="customTrackerUrl" class="input-text" placeholder="http://localhost:5000" />
                 <button id="saveUrlBtn" class="btn btn-secondary btn-sm">Save</button>

@@ -38,7 +38,7 @@ const MyDatePicker = ({ date, setDate }: TMyDatePicker) => {
                 <Button
                     variant={'outline'}
                     className={cn(
-                        'h-9 w-full justify-start border border-gray-300 bg-white hover:bg-white px-3 py-2 text-sm text-left shadow-sm focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 cursor-pointer',
+                        'h-9 w-full justify-start border border-gray-300 bg-white hover:bg-white px-3 py-2 text-sm text-left shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2 cursor-pointer',
                         !date && 'text-muted-foreground hover:text-[#777]',
                     )}
                 >

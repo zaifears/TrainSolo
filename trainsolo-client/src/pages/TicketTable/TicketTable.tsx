@@ -35,6 +35,7 @@ const TicketTable = () => {
     const [scanCount, setScanCount] = useState(0);
     const [lastScanTime, setLastScanTime] = useState<string | null>(null);
     const [lastErrorMsg, setLastErrorMsg] = useState<string | null>(null);
+    const [isAuthExpired, setIsAuthExpired] = useState(false);
     const [notificationsEnabled, setNotificationsEnabled] = useState(
         typeof window !== 'undefined' &&
             'Notification' in window &&
@@ -66,7 +67,7 @@ const TicketTable = () => {
     // Core ticket scanning function with synchronous in-flight guard and AbortController
     const fetchAllTickets = useCallback(async () => {
         if (!scans || !scans.some((s) => s.from && s.to && s.date)) return;
-        if (inFlightRef.current) return;
+        if (inFlightRef.current || isAuthExpired) return;
 
         inFlightRef.current = true;
         setIsFetching(true);
@@ -84,8 +85,9 @@ const TicketTable = () => {
                 scans.map(async (scan) => {
                     if (!scan.from || !scan.to || !scan.date) return;
                     const formatDate = formatDateToStr(scan.date);
-                    // Disambiguate cache key with class and train filter
-                    const key = `${scan.from}-${scan.to}-${formatDate}-${scan.seatClass || 'ANY'}-${scan.preferredTrain || 'ALL'}`;
+                    const partySize = scan.seatCount || 1;
+                    // Disambiguate cache key with party size, class and train filter
+                    const key = `${scan.from}-${scan.to}-${formatDate}-${scan.seatClass || 'ANY'}-${scan.preferredTrain || 'ALL'}-${partySize}`;
 
                     try {
                         const res = await axiosInstance.post(
@@ -95,19 +97,24 @@ const TicketTable = () => {
                                 to: scan.to,
                                 date: formatDate,
                                 seatClass: scan.seatClass,
-                                seatCount: scan.seatCount,
+                                seatCount: partySize,
                                 preferredTrain: scan.preferredTrain,
                             },
-                            { signal: abortController.signal }
+                            { signal: abortController.signal },
                         );
 
                         if (currentRequestId !== scanRequestIdRef.current) return;
 
                         const rawTickets = (res.data.data || []) as ITicket[];
-                        const newTickets = rawTickets.map((t) => ({
+                        // Attach provenance metadata to each ticket
+                        const newTickets: ITicket[] = rawTickets.map((t) => ({
                             ...t,
                             from: scan.from,
                             to: scan.to,
+                            scanId: key,
+                            requiredSeats: partySize,
+                            journeyDate: formatDate,
+                            isStale: false,
                         }));
 
                         const prevTickets = ticketsObjRef.current[key] || [];
@@ -157,6 +164,7 @@ const TicketTable = () => {
                                 updatedList.push({
                                     ...oldTicket,
                                     seats: 0,
+                                    isStale: false,
                                     now: new Date().toISOString(),
                                 });
                             }
@@ -171,6 +179,23 @@ const TicketTable = () => {
                             (err as { name?: string })?.name === 'CanceledError' ||
                             (err as { name?: string })?.name === 'AbortError';
                         if (isCanceled) return;
+
+                        const statusCode = (err as { response?: { status?: number } })?.response?.status;
+                        if (statusCode === 401 || statusCode === 403) {
+                            setIsAuthExpired(true);
+                            setLastErrorMsg('Bangladesh Railway session expired. Please re-authenticate.');
+                            return;
+                        }
+
+                        // Mark existing tickets in this scan partition as stale
+                        setTicketsObj((prev) => {
+                            const existing = prev[key];
+                            if (!existing) return prev;
+                            return {
+                                ...prev,
+                                [key]: existing.map((t) => ({ ...t, isStale: true })),
+                            };
+                        });
 
                         const message =
                             err &&
@@ -193,7 +218,7 @@ const TicketTable = () => {
             setLastScanTime(moment().format('hh:mm:ss A'));
             setCountdown(SCAN_INTERVAL_SECONDS);
         }
-    }, [scans]);
+    }, [scans, isAuthExpired]);
 
     // Initial immediate fetch on mount
     useEffect(() => {
@@ -202,6 +227,8 @@ const TicketTable = () => {
 
     // Live clock ticker & 7:59:58 AM precision trigger
     useEffect(() => {
+        if (isAuthExpired) return;
+
         const timer = setInterval(() => {
             const now = moment().tz('Asia/Dhaka');
             setBstClock(now.format('hh:mm:ss A'));
@@ -238,25 +265,29 @@ const TicketTable = () => {
         }, 500);
 
         return () => clearInterval(timer);
-    }, [fetchAllTickets, isFetching]);
+    }, [fetchAllTickets, isFetching, isAuthExpired]);
 
     // Automatic countdown interval
     useEffect(() => {
+        if (isAuthExpired) return;
+
         const interval = setInterval(() => {
             if (inBurstRef.current) return;
             setCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
         }, 1000);
 
         return () => clearInterval(interval);
-    }, []);
+    }, [isAuthExpired]);
 
     // Dedicated effect to trigger periodic scans outside the state updater
     useEffect(() => {
+        if (isAuthExpired) return;
+
         if (countdown === 0 && !inBurstRef.current) {
             setCountdown(SCAN_INTERVAL_SECONDS);
             fetchAllTickets();
         }
-    }, [countdown, fetchAllTickets]);
+    }, [countdown, fetchAllTickets, isAuthExpired]);
 
     // Abort in-flight scans on unmount
     useEffect(() => {
@@ -269,6 +300,7 @@ const TicketTable = () => {
     }, []);
 
     const handleManualScan = () => {
+        if (isAuthExpired) return;
         setCountdown(SCAN_INTERVAL_SECONDS);
         fetchAllTickets();
     };
@@ -279,6 +311,14 @@ const TicketTable = () => {
         }
         inFlightRef.current = false;
         navigate('/');
+    };
+
+    const handleReauthenticate = () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('ssdk');
+        localStorage.removeItem('uudid');
+        localStorage.removeItem('userName');
+        navigate('/login');
     };
 
     const handleTestNotificationAudio = () => {
@@ -353,7 +393,7 @@ const TicketTable = () => {
 
     const ticketsArray: ITicket[] = Object.values(ticketsObj).flat();
     const ticketsWithSufficientSeats = ticketsArray.filter(
-        (t) => t.seats >= neededSeats,
+        (t) => t.seats >= (t.requiredSeats || neededSeats),
     );
     const availableTickets = ticketsArray.filter((t) => t.seats > 0);
     const topAvailableTicket =
@@ -369,14 +409,17 @@ const TicketTable = () => {
 
     const syncTargetToExtension = (ticket: ITicket) => {
         const matchingScan =
+            scans.find(
+                (s) =>
+                    s.from === ticket.from &&
+                    s.to === ticket.to &&
+                    (s.date ? formatDateToStr(s.date) : '') === (ticket.journeyDate || ''),
+            ) ||
             scans.find((s) => s.from === ticket.from && s.to === ticket.to) ||
             scans[0];
-        const targetSeats = matchingScan?.seatCount || neededSeats;
-        const targetDate = matchingScan?.date
-            ? formatDateToStr(matchingScan.date)
-            : scans[0]?.date
-              ? formatDateToStr(scans[0].date)
-              : '';
+
+        const targetSeats = ticket.requiredSeats || matchingScan?.seatCount || neededSeats;
+        const targetDate = ticket.journeyDate || (matchingScan?.date ? formatDateToStr(matchingScan.date) : '');
 
         const payload = {
             train: ticket.trainName,
@@ -438,7 +481,15 @@ const TicketTable = () => {
             {/* Header Status Bar */}
             <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse shadow-sm" />
+                    <div
+                        className={`w-3 h-3 rounded-full ${
+                            isAuthExpired
+                                ? 'bg-red-500'
+                                : isFetching
+                                  ? 'bg-amber-500 animate-ping'
+                                  : 'bg-emerald-500 animate-pulse'
+                        } shadow-sm`}
+                    />
                     <div>
                         <h2 className="text-base font-bold text-gray-800 flex items-center gap-2">
                             TrainSolo Live Scanner
@@ -462,7 +513,11 @@ const TicketTable = () => {
 
                 <div className="flex items-center gap-2 text-xs font-medium text-gray-600 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-200">
                     <span>
-                        Next scan in: <strong className="text-emerald-700">{countdown}s</strong>
+                        {isAuthExpired ? (
+                            <strong className="text-red-600">Scan Halted</strong>
+                        ) : (
+                            <>Next scan in: <strong className="text-emerald-700">{countdown}s</strong></>
+                        )}
                     </span>
                     <span>•</span>
                     <span>Pings: {scanCount}</span>
@@ -475,14 +530,55 @@ const TicketTable = () => {
                 </div>
             </div>
 
+            {/* Permanent Auth Expiration Banner */}
+            {isAuthExpired && (
+                <div
+                    role="alert"
+                    aria-live="assertive"
+                    className="bg-red-50 border border-red-300 text-red-900 p-4 rounded-2xl text-center space-y-2.5 shadow-sm"
+                >
+                    <div className="font-bold text-sm flex items-center justify-center gap-2">
+                        <span>🔒</span> Bangladesh Railway Session Expired
+                    </div>
+                    <p className="text-xs text-red-700 max-w-lg mx-auto">
+                        Your railway access token is no longer valid. The scanner has been paused to prevent account lockout or rate-limiting.
+                    </p>
+                    <Button
+                        size="sm"
+                        className="bg-red-600 hover:bg-red-700 text-white font-semibold cursor-pointer text-xs px-4 py-2"
+                        onClick={handleReauthenticate}
+                    >
+                        Re-authenticate Credentials
+                    </Button>
+                </div>
+            )}
+
+            {/* Transient Error Banner */}
+            {lastErrorMsg && !isAuthExpired && (
+                <div
+                    role="alert"
+                    aria-live="assertive"
+                    className="bg-amber-50 border border-amber-200 text-amber-800 text-xs px-4 py-2.5 rounded-xl text-center"
+                >
+                    ⚠️ {lastErrorMsg} — Displayed inventory may be stale. Scanner will retry in {countdown}s.
+                </div>
+            )}
+
             {/* HERO DIRECT ONE-CLICK AUTO-CUT CARD (When tickets are available) */}
             {topAvailableTicket && (
-                <div className="bg-gradient-to-r from-emerald-600 via-emerald-700 to-green-800 text-white p-5 sm:p-6 rounded-2xl shadow-xl border-2 border-emerald-400 flex flex-col md:flex-row items-center justify-between gap-5 transition-all">
+                <div className={`text-white p-5 sm:p-6 rounded-2xl shadow-xl border-2 flex flex-col md:flex-row items-center justify-between gap-5 transition-all ${
+                    topAvailableTicket.isStale
+                        ? 'bg-gradient-to-r from-amber-700 via-yellow-800 to-amber-900 border-amber-400'
+                        : 'bg-gradient-to-r from-emerald-600 via-emerald-700 to-green-800 border-emerald-400'
+                }`}>
                     <div className="space-y-1.5 text-center md:text-left">
-                        <div className="inline-flex items-center gap-2 bg-emerald-950/50 text-emerald-200 text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full border border-emerald-400/40">
+                        <div className="inline-flex items-center gap-2 bg-black/40 text-emerald-200 text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full border border-white/20">
                             <span>⚡ TOP AVAILABLE MATCH</span>
                             <span>•</span>
-                            <span>{topAvailableTicket.seats} Seats in Inventory</span>
+                            <span>{topAvailableTicket.seats} Seats</span>
+                            {topAvailableTicket.isStale && (
+                                <span className="text-amber-300 font-extrabold">• (STALE INVENTORY)</span>
+                            )}
                         </div>
                         <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow">
                             {topAvailableTicket.trainName} • <span className="text-amber-300">{topAvailableTicket.class}</span>
@@ -514,7 +610,7 @@ const TicketTable = () => {
                     size="sm"
                     className="bg-[#1ca559] hover:bg-[#167457] text-white cursor-pointer font-semibold shadow-sm"
                     onClick={handleManualScan}
-                    disabled={isFetching}
+                    disabled={isFetching || isAuthExpired}
                 >
                     {isFetching ? (
                         <>
@@ -572,16 +668,13 @@ const TicketTable = () => {
                 </Button>
             </div>
 
-            {/* Error Banner if Shohoz has temporary glitch */}
-            {lastErrorMsg && (
-                <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs px-4 py-2.5 rounded-xl text-center">
-                    ⚠️ {lastErrorMsg} — Scanner is staying active and will retry in {countdown}s.
-                </div>
-            )}
-
             {/* Results or Pre-Drop Standby Card */}
             {isInitialLoading ? (
-                <div className="bg-white p-8 rounded-2xl text-center shadow-sm border border-gray-100 max-w-lg mx-auto">
+                <div
+                    role="status"
+                    aria-live="polite"
+                    className="bg-white p-8 rounded-2xl text-center shadow-sm border border-gray-100 max-w-lg mx-auto"
+                >
                     <ImSpinner9 className="animate-spin text-3xl text-emerald-600 mx-auto mb-3" />
                     <h3 className="text-base font-semibold text-gray-800">
                         Connecting to Bangladesh Railway...
@@ -609,7 +702,7 @@ const TicketTable = () => {
                         </TableHeader>
                         <TableBody>
                             {ticketsArray.map((ticket, index) => (
-                                <TableRow key={index} className="h-12 hover:bg-gray-50">
+                                <TableRow key={`${ticket.trainName}-${ticket.class}-${index}`} className="h-12 hover:bg-gray-50">
                                     <TableCell className="bg-emerald-50/40 font-medium">
                                         {ticket.seats ? (
                                             <a
@@ -620,9 +713,13 @@ const TicketTable = () => {
                                             >
                                                 <Button
                                                     size="sm"
-                                                    className="cursor-pointer bg-[#16a34a] hover:bg-[#15803d] text-white font-bold flex items-center gap-1.5 shadow-sm whitespace-nowrap text-xs px-3 py-1.5"
+                                                    className={`cursor-pointer text-white font-bold flex items-center gap-1.5 shadow-sm whitespace-nowrap text-xs px-3 py-1.5 ${
+                                                        ticket.isStale
+                                                            ? 'bg-amber-600 hover:bg-amber-700'
+                                                            : 'bg-[#16a34a] hover:bg-[#15803d]'
+                                                    }`}
                                                 >
-                                                    ⚡ Auto-Cut & OTP
+                                                    {ticket.isStale ? '⚠️ Auto-Cut (Stale)' : '⚡ Auto-Cut & OTP'}
                                                 </Button>
                                             </a>
                                         ) : (
@@ -641,12 +738,17 @@ const TicketTable = () => {
                                         <span
                                             className={`font-black text-sm ${
                                                 ticket.seats > 0
-                                                    ? 'text-emerald-600'
+                                                    ? ticket.isStale
+                                                        ? 'text-amber-600'
+                                                        : 'text-emerald-600'
                                                     : 'text-gray-400'
                                             }`}
                                         >
                                             {ticket.seats}
                                         </span>
+                                        {ticket.isStale && (
+                                            <span className="ml-1 text-[10px] text-amber-600 font-semibold">(stale)</span>
+                                        )}
                                     </TableCell>
                                     <TableCell className="text-xs font-medium text-gray-700">
                                         {ticket.departureDateTime}
@@ -667,7 +769,11 @@ const TicketTable = () => {
                 </div>
             ) : (
                 /* Pre-Drop Standby Card (Active when 0 trains / 0 seats before 8:00 AM) */
-                <div className="bg-white p-8 rounded-2xl max-w-xl mx-auto text-center shadow-sm border border-blue-100 space-y-4">
+                <div
+                    role="status"
+                    aria-live="polite"
+                    className="bg-white p-8 rounded-2xl max-w-xl mx-auto text-center shadow-sm border border-blue-100 space-y-4"
+                >
                     <div className="inline-flex items-center justify-center w-14 h-14 bg-emerald-50 text-emerald-600 rounded-full text-2xl animate-pulse">
                         🕒
                     </div>
@@ -690,12 +796,12 @@ const TicketTable = () => {
                             onClick={handleManualScan}
                             size="sm"
                             className="bg-[#1ca559] hover:bg-[#167457] text-white font-semibold px-4 cursor-pointer"
-                            disabled={isFetching}
+                            disabled={isFetching || isAuthExpired}
                         >
                             {isFetching ? 'Checking now...' : '⚡ Scan Now (Instant Check)'}
                         </Button>
                         <span className="text-xs text-gray-400">
-                            Auto-checking in {countdown}s
+                            {isAuthExpired ? 'Halted' : `Auto-checking in ${countdown}s`}
                         </span>
                     </div>
                 </div>

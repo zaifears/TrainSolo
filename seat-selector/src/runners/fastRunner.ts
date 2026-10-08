@@ -2,6 +2,8 @@ import { DirectCdpPage } from '../browser/directCdp.js';
 import { Logger } from '../logging/redactor.js';
 import { AppConfig } from '../config/schema.js';
 import { ClickLedger } from '../safety/clickLedger.js';
+import { SeatRanker } from '../seats/seatRanker.js';
+import { Seat } from '../seats/seat.types.js';
 
 export interface FastRunOptions {
   /** Keep checking until seats appear instead of exiting after one look. */
@@ -81,20 +83,22 @@ export class FastRunner {
     if (!session.hasToken || !session.hasSsdk || /\/login/i.test(session.url)) {
       bell();
       this.logger.error('Not logged in (or session expired). Log in to eticket.railway.gov.bd in Brave, then re-run.');
-      return 'stop';
+      return safety.stopOnSessionExpiry ? 'stop' : 'retry';
     }
 
-    // 2. Make sure the tab shows THIS journey (route + date + class), not whatever search was open last.
+    // 2. Make sure the tab shows THIS journey (route + date), not whatever search was open last.
+    const configuredClasses = journey.classes.length > 0 ? journey.classes : ['S_CHAIR'];
+    let targetClass = configuredClasses[0];
+
     const url = new URL(session.url);
     const onRightSearch = url.pathname.includes('/booking/train/search')
       && norm(url.searchParams.get('fromcity') || '') === norm(journey.from)
       && norm(url.searchParams.get('tocity') || '') === norm(journey.to)
-      && norm(url.searchParams.get('doj') || '') === norm(journey.date)
-      && norm(url.searchParams.get('class') || '') === norm(targetClass);
+      && norm(url.searchParams.get('doj') || '') === norm(journey.date);
 
     if (!onRightSearch || !firstPass) {
       const searchUrl = `https://eticket.railway.gov.bd/booking/train/search?fromcity=${encodeURIComponent(journey.from)}&tocity=${encodeURIComponent(journey.to)}&doj=${encodeURIComponent(journey.date)}&class=${encodeURIComponent(targetClass)}`;
-      this.logger.info(onRightSearch ? 'Reloading search results...' : `Tab is on a different journey; opening ${journey.from} ➔ ${journey.to} ${journey.date} ${targetClass}...`);
+      this.logger.info(onRightSearch ? 'Reloading search results...' : `Tab is on a different journey; opening ${journey.from} ➔ ${journey.to} ${journey.date}...`);
       await page.evaluate((u: string) => { location.href = u; }, searchUrl);
       await sleep(800);
     }
@@ -108,41 +112,53 @@ export class FastRunner {
       return 'retry';
     }
 
-    // 3. Locate train card and the tile for the requested class; open its seat map.
-    const open = await page.evaluate(({ trains, cls }: { trains: string[]; cls: string }) => {
-      const n = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const num = (s: string) => (s.match(/\((\d+)\)/) || [])[1];
-      const cards = Array.from(document.querySelectorAll<HTMLElement>('.single-trip-wrapper'));
-      const card = cards.find(c => {
-        const title = n(c.querySelector('h2, h3, h4, .train-name')?.textContent || c.innerText.slice(0, 80));
-        // Match by full name, or by train number (spellings vary: PARJATAK vs PARJOTAK).
-        return trains.some(t => title.includes(n(t)) || (num(t) && title.includes(num(t)!)));
-      });
-      if (!card) return { status: 'no-train', trainsOnPage: cards.map(c => c.innerText.split('\n')[0]) };
+    // 3. Locate train card and tile for configured classes in priority order; open its seat map.
+    let open: any = null;
+    for (const cls of configuredClasses) {
+      targetClass = cls;
+      const result = await page.evaluate(({ trains, cls }: { trains: string[]; cls: string }) => {
+        const n = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const num = (s: string) => (s.match(/\((\d+)\)/) || [])[1];
+        const cards = Array.from(document.querySelectorAll<HTMLElement>('.single-trip-wrapper'));
+        const card = cards.find(c => {
+          const title = n(c.querySelector('h2, h3, h4, .train-name')?.textContent || c.innerText.slice(0, 80));
+          return trains.some(t => title.includes(n(t)) || (num(t) && title.includes(num(t)!)));
+        });
+        if (!card) return { status: 'no-train', trainsOnPage: cards.map(c => c.innerText.split('\n')[0]) };
 
-      const tile = Array.from(card.querySelectorAll<HTMLElement>('.single-seat-class'))
-        .find(t => n(t.querySelector('.seat-class-name')?.textContent || '') === n(cls));
-      if (!tile) return { status: 'no-class' };
+        const tile = Array.from(card.querySelectorAll<HTMLElement>('.single-seat-class'))
+          .find(t => n(t.querySelector('.seat-class-name')?.textContent || '') === n(cls));
+        if (!tile) return { status: 'no-class' };
 
-      const seatMapOpen = tile.classList.contains('selected') && !!card.querySelector('#select-bogie');
-      if (seatMapOpen) return { status: 'open' };
+        const seatMapOpen = tile.classList.contains('selected') && !!card.querySelector('#select-bogie');
+        if (seatMapOpen) return { status: 'open' };
 
-      const btn = tile.querySelector<HTMLButtonElement>('.book-now-btn');
-      if (!btn) return { status: 'sold-out' }; // portal only renders BOOK NOW when tickets > 0
-      btn.click();
-      return { status: 'clicked' };
-    }, { trains: journey.trainNames, cls: targetClass });
+        const btn = tile.querySelector<HTMLButtonElement>('.book-now-btn');
+        if (!btn) return { status: 'sold-out' };
+        btn.click();
+        return { status: 'clicked' };
+      }, { trains: journey.trainNames, cls: targetClass });
+
+      open = result;
+      if (open.status === 'open' || open.status === 'clicked') {
+        break;
+      }
+      if (open.status === 'no-train') {
+        break;
+      }
+      this.logger.info(`Class ${cls}: ${open.status === 'sold-out' ? 'sold out' : 'not present'}. Checking next class...`);
+    }
 
     if (open.status === 'no-train') {
       this.logger.warn(`Train not listed for this date. Trains on page: ${(open as any).trainsOnPage.join(' | ') || 'none'}`);
       return 'retry';
     }
     if (open.status === 'no-class') {
-      this.logger.error(`Train has no ${targetClass} class. Check config.journey.classes.`);
+      this.logger.error(`Train has none of configured classes [${configuredClasses.join(', ')}]. Check config.journey.classes.`);
       return 'stop';
     }
     if (open.status === 'sold-out') {
-      this.logger.info(`${targetClass}: 0 tickets available right now.`);
+      this.logger.info(`Configured classes [${configuredClasses.join(', ')}]: 0 tickets available right now.`);
       return 'retry';
     }
     if (open.status === 'clicked') {
@@ -208,7 +224,7 @@ export class FastRunner {
     const needed = journey.seatCount - mine.length;
     let picks: LiveSeat[] = [];
     if (needed > 0) {
-      picks = this.choose(available, needed);
+      picks = this.choose(coachName, available, needed);
       if (picks.length < needed) {
         if (held.length) this.logger.info('Some seats are held by other buyers (green). They may free up in ~5 min if payment fails.');
         return 'retry';
@@ -265,10 +281,58 @@ export class FastRunner {
     }, coach) as Promise<LiveSeat[]>;
   }
 
-  /** Prefer exact seats, then a consecutive run, then (if allowed) any seats in the coach. */
-  private choose(available: LiveSeat[], needed: number): LiveSeat[] {
+  /** Choose seats using canonical SeatRanker honoring window, adjacency, and fallback preferences. */
+  private choose(coach: string, available: LiveSeat[], needed: number): LiveSeat[] {
     const prefs = this.config.preferences;
-    const exact = available.filter(s => prefs.exactSeats.some(e => e.toUpperCase() === s.label.toUpperCase()));
+
+    // Convert LiveSeat to standard Seat model with window, row, and column evidence
+    const standardSeats: Seat[] = available.map((s) => {
+      const num = s.num;
+      const isWindow = num > 0 ? num % 4 === 1 || num % 4 === 0 : false;
+      const row = num > 0 ? String(Math.ceil(num / 4)) : undefined;
+      const col = num > 0 ? String(((num - 1) % 4) + 1) : undefined;
+      const labelToken = s.label.includes('-') ? s.label.split('-').pop()! : s.label;
+
+      return {
+        coach,
+        label: labelToken,
+        available: s.state === 'available',
+        selected: s.state === 'selected',
+        enabled: true,
+        isWindow,
+        row,
+        column: col,
+      };
+    });
+
+    const rankerConfig = {
+      ...this.config,
+      journey: {
+        ...this.config.journey,
+        seatCount: needed,
+      },
+    };
+
+    const ranked = SeatRanker.rankAndSelect(standardSeats, rankerConfig);
+    if (ranked && ranked.seats.length >= needed) {
+      const selectedTokens = new Set(ranked.seats.map((s) => s.label.toUpperCase()));
+      const matchedLive = available.filter((s) => {
+        const token = s.label.includes('-') ? s.label.split('-').pop()! : s.label;
+        return selectedTokens.has(token.toUpperCase());
+      });
+      if (matchedLive.length >= needed) {
+        return matchedLive.slice(0, needed);
+      }
+    }
+
+    // Direct fallback: exact seats first
+    const exact = available.filter((s) =>
+      prefs.exactSeats.some(
+        (e) =>
+          e.toUpperCase() === s.label.toUpperCase() ||
+          e.toUpperCase() === `${coach}-${s.label}`.toUpperCase()
+      )
+    );
     if (exact.length >= needed) return exact.slice(0, needed);
     if (needed === 1) return available.slice(0, 1);
 

@@ -7,10 +7,11 @@ const MainLayout = () => (
         <Container className="py-3">
             <img
                 src={bgImage}
-                alt="Train"
-                className="fixed bottom-0 right-0 w-4xl -z-10 opacity-90"
+                alt=""
+                aria-hidden="true"
+                className="fixed bottom-0 right-0 w-4xl -z-10 opacity-90 pointer-events-none select-none"
             />
-            <div className="fixed bottom-0 top-0 right-0 left-0 -z-20 bg-[#e4eae8]" />
+            <div className="fixed bottom-0 top-0 right-0 left-0 -z-20 bg-slate-100" />
             <Outlet />
         </Container>
     </main>

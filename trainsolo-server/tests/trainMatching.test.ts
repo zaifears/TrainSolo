@@ -1,45 +1,8 @@
 import { describe, it, expect } from 'vitest';
-
-function extractTrainNumber(tripNumber: string): string {
-    const match = tripNumber.match(/\b\d{3,4}\b/);
-    return match ? match[0] : '';
-}
-
-function normalizeTrainName(str: string): string {
-    return (str || '')
-        .toUpperCase()
-        .replace(/\b(EXPRESS|INTERCITY|COMMUTER|MAIL|SPECIAL)\b/g, '')
-        .replace(/H/g, '')
-        .replace(/([A-Z])\1+/g, '$1')
-        .replace(/[^A-Z0-9]/g, '');
-}
-
-function matchesTrain(
-    cardText: string,
-    targetTrain: string,
-    targetTrainNumber?: string,
-): boolean {
-    const numberToMatch =
-        targetTrainNumber || extractTrainNumber(targetTrain);
-    if (numberToMatch) {
-        const numRegex = new RegExp(`\\(${numberToMatch}\\)|\\b${numberToMatch}\\b`);
-        if (numRegex.test(cardText)) {
-            return true;
-        }
-    }
-
-    if (targetTrain && cardText.toUpperCase().includes(targetTrain.toUpperCase())) {
-        return true;
-    }
-
-    const normTarget = normalizeTrainName(targetTrain);
-    const normCard = normalizeTrainName(cardText);
-    if (normTarget.length >= 3 && (normCard.includes(normTarget) || normTarget.includes(normCard))) {
-        return true;
-    }
-
-    return false;
-}
+import {
+    extractTrainNumber,
+    matchesTrain,
+} from '../src/app/modules/ticket/ticket.utils';
 
 describe('TrainSolo Train Matching & Identification', () => {
     it('extracts 3-digit train number 743 from BHRAMMAPUTRA EXPRESS (743)', () => {

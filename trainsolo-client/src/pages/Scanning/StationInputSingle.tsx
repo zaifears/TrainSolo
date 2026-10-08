@@ -14,6 +14,11 @@ type TStationInputSingleProps = {
 const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
     const { scans, setScans } = useTicketContext();
 
+    const fromId = `from-station-${index}`;
+    const toId = `to-station-${index}`;
+    const classId = `seat-class-${index}`;
+    const trainId = `preferred-train-${index}`;
+
     const updateField = (
         field: keyof TScan,
         value: SetStateAction<string> | SetStateAction<Date | undefined>,
@@ -32,12 +37,13 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
             <div className="grid md:grid-cols-3 gap-6">
                 <div className="space-y-2">
                     <div className="flex items-center gap-2">
-                        <FaMapMarkerAlt className="text-green-500" />
-                        <Label className="text-gray-700 font-medium">
+                        <FaMapMarkerAlt className="text-green-500" aria-hidden="true" />
+                        <Label htmlFor={fromId} className="text-gray-700 font-medium">
                             From
                         </Label>
                     </div>
                     <MyAutosuggestInput
+                        id={fromId}
                         value={scan.from}
                         setValue={(val) => updateField('from', val)}
                         placeholder="Select departure station"
@@ -46,22 +52,23 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
 
                 <div className="space-y-2 relative">
                     <div className="flex items-center gap-2">
-                        <FaMapMarkerAlt className="text-red-500" />
-                        <Label className="text-gray-700 font-medium">To</Label>
+                        <FaMapMarkerAlt className="text-red-500" aria-hidden="true" />
+                        <Label htmlFor={toId} className="text-gray-700 font-medium">To</Label>
                     </div>
                     <MyAutosuggestInput
+                        id={toId}
                         value={scan.to}
                         setValue={(val) => updateField('to', val)}
                         placeholder="Select destination station"
                     />
-                    <div className="hidden md:block absolute top-8 -left-5 text-blue-500">
+                    <div className="hidden md:block absolute top-8 -left-5 text-blue-500" aria-hidden="true">
                         <FaArrowRight className="text-xl" />
                     </div>
                 </div>
 
                 <div className="space-y-2">
                     <div className="flex items-center gap-2">
-                        <FaCalendarAlt className="text-blue-500" />
+                        <FaCalendarAlt className="text-blue-500" aria-hidden="true" />
                         <Label className="text-gray-700 font-medium">
                             Journey Date
                         </Label>
@@ -77,21 +84,22 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
             <div className="grid md:grid-cols-3 gap-6 mt-5 pt-4 border-t border-blue-100">
                 {/* Seat Count Selector */}
                 <div className="space-y-2">
-                    <Label className="text-gray-700 font-medium flex items-center justify-between">
+                    <div className="text-gray-700 font-medium flex items-center justify-between text-sm">
                         <span>Passenger Seats Needed</span>
                         <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded">
                             {scan.seatCount || 1} { (scan.seatCount || 1) > 1 ? 'Seats' : 'Seat' }
                         </span>
-                    </Label>
-                    <div className="grid grid-cols-4 gap-2">
+                    </div>
+                    <div className="grid grid-cols-4 gap-2" role="group" aria-label="Passenger seat count">
                         {[1, 2, 3, 4].map((count) => {
                             const isSelected = (scan.seatCount || 1) === count;
                             return (
                                 <button
                                     key={count}
                                     type="button"
+                                    aria-pressed={isSelected}
                                     onClick={() => updateField('seatCount', count as any)}
-                                    className={`py-2 text-sm font-bold rounded-lg border transition-all ${
+                                    className={`py-2 text-sm font-bold rounded-lg border transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2 ${
                                         isSelected
                                             ? 'bg-[#1ca559] text-white border-[#1ca559] shadow-sm'
                                             : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
@@ -107,10 +115,11 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
 
                 {/* Seat Class Selector */}
                 <div className="space-y-2">
-                    <Label className="text-gray-700 font-medium">
+                    <Label htmlFor={classId} className="text-gray-700 font-medium">
                         Preferred Seat Class
                     </Label>
                     <select
+                        id={classId}
                         value={scan.seatClass || 'ANY'}
                         onChange={(e) => updateField('seatClass', e.target.value)}
                         className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1ca559]"
@@ -130,10 +139,11 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
 
                 {/* Preferred Train Filter (Optional) */}
                 <div className="space-y-2">
-                    <Label className="text-gray-700 font-medium">
+                    <Label htmlFor={trainId} className="text-gray-700 font-medium">
                         Preferred Train (Optional)
                     </Label>
                     <input
+                        id={trainId}
                         type="text"
                         value={scan.preferredTrain || ''}
                         onChange={(e) => updateField('preferredTrain', e.target.value)}

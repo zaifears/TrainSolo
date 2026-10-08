@@ -17,4 +17,8 @@ export interface ITicket {
     seats: number;
     now: string;
     link: string;
+    scanId?: string;
+    requiredSeats?: number;
+    journeyDate?: string;
+    isStale?: boolean;
 }

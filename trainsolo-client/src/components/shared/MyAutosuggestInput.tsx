@@ -9,17 +9,19 @@ type TAutoSuggestionInputProps = {
     placeholder: string;
     value: string;
     setValue: Dispatch<SetStateAction<string>>;
+    id?: string;
 };
 
 const MyAutosuggestInput = ({
     placeholder,
     value,
     setValue,
+    id,
 }: TAutoSuggestionInputProps) => {
     const [items, setItems] = useState<TStation[]>([]);
 
     const getFilteredItems = (input: string) => {
-        if (input.length < 1) return []; // 👈 show nothing if less than 1 char
+        if (input.length < 1) return []; // show nothing if less than 1 char
         return citiesOptions.filter((city) =>
             city.name.toLowerCase().startsWith(input.toLowerCase()),
         );
@@ -46,9 +48,9 @@ const MyAutosuggestInput = ({
     return (
         <div className="relative w-full">
             <Input
-                className="h-9 text-sm font-normal placeholder:font-light bg-white focus-visible:ring-0 focus-visible:ring-offset-0 border-gray-300 focus:border-blue-400"
+                className="h-9 text-sm font-normal placeholder:font-light bg-white border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2"
                 placeholder={placeholder}
-                {...getInputProps()}
+                {...getInputProps({ id })}
             />
             <ul
                 className={`absolute z-10 bg-white border border-gray-300 rounded-md shadow-md mt-1 w-full max-h-60 overflow-y-auto text-sm ${

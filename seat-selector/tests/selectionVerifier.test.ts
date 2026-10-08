@@ -52,4 +52,24 @@ describe('SelectionVerifier Post-Click Verification Tests', () => {
     expect(result.success).toBe(false);
     expect(result.mismatches.some(m => m.includes('is NOT displayed in Seat Details panel'))).toBe(true);
   });
+
+  it('strictly rejects when intended coach is KA but summary panel reports KHA-10 (CQ-006 coach preservation)', () => {
+    const intended: Seat[] = [mockSeat('KA', '10')];
+    const mapLabels = ['10'];
+    const detailsLabels = ['KHA-10']; // Same number, WRONG coach!
+
+    const result = SelectionVerifier.verify(intended, mapLabels, detailsLabels, 1);
+    expect(result.success).toBe(false);
+    expect(result.mismatches.some(m => m.includes('is NOT displayed in Seat Details panel'))).toBe(true);
+  });
+
+  it('strictly rejects seat 1 when summary panel reports seat 10 (CQ-006 substring rejection)', () => {
+    const intended: Seat[] = [mockSeat('KA', '1')];
+    const mapLabels = ['1'];
+    const detailsLabels = ['KA-10']; // Substring 1 matches inside 10 if not strictly bounded
+
+    const result = SelectionVerifier.verify(intended, mapLabels, detailsLabels, 1);
+    expect(result.success).toBe(false);
+    expect(result.mismatches.some(m => m.includes('is NOT displayed in Seat Details panel'))).toBe(true);
+  });
 });

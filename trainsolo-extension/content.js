@@ -2,6 +2,44 @@
 (function () {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+    // Consumes one-shot intent so it cannot survive to unrelated searches or subsequent page loads
+    function consumeBookingIntent() {
+        try {
+            const raw = sessionStorage.getItem("trainsolo_booking_target");
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                parsed.autocut = false;
+                parsed.autoCut = false;
+                sessionStorage.setItem("trainsolo_booking_target", JSON.stringify(parsed));
+            }
+        } catch (_) {}
+        if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.get(["trainsolo_booking_target"], (data) => {
+                if (data && data.trainsolo_booking_target) {
+                    const updated = { ...data.trainsolo_booking_target, autocut: false, autoCut: false };
+                    chrome.storage.local.set({ trainsolo_booking_target: updated });
+                }
+            });
+        }
+    }
+
+    // Normalizes date representations for equivalence checking
+    function normalizeDate(d) {
+        if (!d) return "";
+        const s = d.toLowerCase().trim();
+        const monMap = {
+            jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+            jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12"
+        };
+        const iso = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+        if (iso) return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+        const dmy = s.match(/^(\d{1,2})[-/.\s]+([a-z]{3,})[-/.\s]+(\d{4})$/);
+        if (dmy && monMap[dmy[2].slice(0, 3)]) {
+            return `${dmy[3]}-${monMap[dmy[2].slice(0, 3)]}-${dmy[1].padStart(2, "0")}`;
+        }
+        return s.replace(/[^a-z0-9]/g, "");
+    }
+
     // 0. IMMEDIATE CAPTURE AT DOCUMENT_START:
     // Capture URL search and hash parameters before Angular Router sanitizes or strips them from the address bar!
     try {
@@ -14,6 +52,9 @@
         const earlySeats = parseInt(getEarly("seats") || "0", 10);
         const earlyClass = getEarly("class");
         const earlyAutoCut = location.hash.includes("autocut=1") || location.search.includes("autocut=1");
+        const earlyFrom = getEarly("from") || getEarly("fromcity");
+        const earlyTo = getEarly("to") || getEarly("tocity");
+        const earlyDate = getEarly("date") || getEarly("doj");
 
         if (earlyTrain || earlySeats || earlyClass || earlyAutoCut) {
             let existing = {};
@@ -27,7 +68,8 @@
                 earlyTrainNum || existing.train_number || existing.trainNumber || (mergedTrain.match(/\b\d{3,4}\b/) || [])[0] || "";
             const mergedSeats = (earlySeats > 0 ? earlySeats : null) || existing.seats || null;
             const mergedClass = earlyClass || existing.class || existing.seatClass || "";
-            const mergedAutoCut = earlyAutoCut || existing.autocut || existing.autoCut || false;
+            // CQ-004: Only activate autocut if explicit in the current navigation URL; do not preserve old execution intent
+            const mergedAutoCut = Boolean(earlyAutoCut);
 
             const cached = {
                 train: mergedTrain,
@@ -38,6 +80,9 @@
                 seatClass: mergedClass,
                 autocut: mergedAutoCut,
                 autoCut: mergedAutoCut,
+                from: earlyFrom || existing.from || "",
+                to: earlyTo || existing.to || "",
+                date: earlyDate || existing.date || "",
                 timestamp: Date.now(),
             };
             sessionStorage.setItem("trainsolo_booking_target", JSON.stringify(cached));
@@ -170,6 +215,17 @@
         });
     }
 
+    // Helper: checks whether an element represents a selected seat
+    function isSeatSelected(el) {
+        if (!el) return false;
+        const cl = el.className || "";
+        return (
+            cl.includes("selected") ||
+            cl.includes("seat-selected") ||
+            el.getAttribute("aria-selected") === "true"
+        );
+    }
+
     // Resolves target configuration with 3-tier fallback (URL -> sessionStorage -> chrome.storage)
     async function getEffectiveBookingTarget() {
         const urlParams = new URLSearchParams(location.search);
@@ -182,17 +238,41 @@
         let seatClass = getParam("class");
         let autoCut = location.hash.includes("autocut=1") || location.search.includes("autocut=1");
 
+        const curFrom = getParam("from") || getParam("fromcity") || "";
+        const curTo = getParam("to") || getParam("tocity") || "";
+        const curDate = getParam("date") || getParam("doj") || "";
+
+        const matchesCurrentJourney = (targetObj) => {
+            if (!targetObj) return false;
+            if (targetObj.from && curFrom && targetObj.from.trim().toLowerCase() !== curFrom.trim().toLowerCase()) {
+                return false;
+            }
+            if (targetObj.to && curTo && targetObj.to.trim().toLowerCase() !== curTo.trim().toLowerCase()) {
+                return false;
+            }
+            if (targetObj.date && curDate && normalizeDate(targetObj.date) !== normalizeDate(curDate)) {
+                return false;
+            }
+            return true;
+        };
+
         // 2. Check early sessionStorage
         if (!train || !seats) {
             try {
                 const rawSession = sessionStorage.getItem("trainsolo_booking_target");
                 if (rawSession) {
                     const s = JSON.parse(rawSession);
-                    if (!train && s.train) train = s.train;
-                    if (!trainNumber && (s.train_number || s.trainNumber)) trainNumber = s.train_number || s.trainNumber;
-                    if (!seats && s.seats) seats = s.seats;
-                    if (!seatClass && (s.class || s.seatClass)) seatClass = s.class || s.seatClass;
-                    if (s.autocut || s.autoCut) autoCut = true;
+                    const isFresh = Date.now() - (s.timestamp || 0) < 10 * 60 * 1000;
+                    if (isFresh && matchesCurrentJourney(s)) {
+                        if (!train && s.train) train = s.train;
+                        if (!trainNumber && (s.train_number || s.trainNumber)) trainNumber = s.train_number || s.trainNumber;
+                        if (!seats && s.seats) seats = s.seats;
+                        if (!seatClass && (s.class || s.seatClass)) seatClass = s.class || s.seatClass;
+                        // Auto-cut only inherits if journey strictly matches and was requested within 5 minutes
+                        if (!autoCut && (s.autocut || s.autoCut) && (Date.now() - (s.timestamp || 0) < 5 * 60 * 1000)) {
+                            autoCut = true;
+                        }
+                    }
                 }
             } catch (_) {}
         }
@@ -201,13 +281,18 @@
         if (!train || !seats) {
             try {
                 const storage = await new Promise((r) => chrome.storage.local.get(["trainsolo_booking_target"], r));
-                const t = storage.trainsolo_booking_target;
-                if (t && Date.now() - (t.timestamp || 0) < 60 * 60 * 1000) {
-                    if (!train && t.train) train = t.train;
-                    if (!trainNumber && (t.train_number || t.trainNumber)) trainNumber = t.train_number || t.trainNumber;
-                    if (!seats && t.seats) seats = t.seats;
-                    if (!seatClass && (t.class || t.seatClass)) seatClass = t.class || t.seatClass;
-                    if (t.autocut || t.autoCut) autoCut = true;
+                const t = storage?.trainsolo_booking_target;
+                if (t) {
+                    const isFresh = Date.now() - (t.timestamp || 0) < 10 * 60 * 1000;
+                    if (isFresh && matchesCurrentJourney(t)) {
+                        if (!train && t.train) train = t.train;
+                        if (!trainNumber && (t.train_number || t.trainNumber)) trainNumber = t.train_number || t.trainNumber;
+                        if (!seats && t.seats) seats = t.seats;
+                        if (!seatClass && (t.class || t.seatClass)) seatClass = t.class || t.seatClass;
+                        if (!autoCut && (t.autocut || t.autoCut) && (Date.now() - (t.timestamp || 0) < 5 * 60 * 1000)) {
+                            autoCut = true;
+                        }
+                    }
                 }
             } catch (_) {}
         }
@@ -455,10 +540,31 @@
                 } catch (_) {}
             }
 
-            // 2. Open seat map (scoped strictly to target card)
-            let seatMapOpen = Boolean(card && card.querySelector("#select-bogie"));
+            // 2. Open seat map (scoped strictly to target card and verified class)
+            let bogieSelect = card ? card.querySelector("#select-bogie") : null;
+            let seatMapOpen = Boolean(bogieSelect);
+            let openClassMatches = false;
 
-            if (!seatMapOpen && card) {
+            if (seatMapOpen && card) {
+                if (!targetClass || targetClass === "ANY") {
+                    openClassMatches = true;
+                } else {
+                    const parentClassContainer = bogieSelect?.closest(
+                        "tr, .trip-seat-class, .seat-class-row, .single-seat-class, li, div[class*='class']"
+                    );
+                    const activeClassElement = card.querySelector(
+                        ".trip-seat-class.active, .seat-class-row.active, .single-seat-class.active, [class*='seat-class'].active, .active-class"
+                    );
+                    if (
+                        (parentClassContainer && matchesSeatClass(parentClassContainer.textContent || "", targetClass)) ||
+                        (activeClassElement && matchesSeatClass(activeClassElement.textContent || "", targetClass))
+                    ) {
+                        openClassMatches = true;
+                    }
+                }
+            }
+
+            if ((!seatMapOpen || !openClassMatches) && card) {
                 onStatus(`Targeting BOOK NOW button for class ${targetClass || "Any"}...`, "running");
 
                 const allCandidates = Array.from(card.querySelectorAll("button, a.btn, a.book-now-btn, input[type='button']"));
@@ -521,13 +627,13 @@
             }
 
             // 3. Select coach with vacant seats (scoped strictly to target card)
-            const bogieSelect = card ? card.querySelector("#select-bogie") : null;
-            if (!bogieSelect) {
+            const bogieSelectUpdated = card ? card.querySelector("#select-bogie") : null;
+            if (!bogieSelectUpdated) {
                 onStatus("Coach dropdown (#select-bogie) not found in target train card.", "error");
                 return false;
             }
 
-            const options = Array.from(bogieSelect.options)
+            const options = Array.from(bogieSelectUpdated.options)
                 .filter((o) => {
                     const text = (o.text || "").trim().toLowerCase();
                     return text && !text.includes("select coach") && !text.includes("বগি নির্বাচন");
@@ -571,28 +677,53 @@
                 return false;
             }
 
-            if (bogieSelect.value !== targetCoach.value) {
+            if (bogieSelectUpdated.value !== targetCoach.value) {
                 onStatus(`Switching to Coach ${targetCoach.name} (${targetCoach.count} seats)...`, "running");
-                bogieSelect.value = targetCoach.value;
-                bogieSelect.dispatchEvent(new Event("change", { bubbles: true }));
-                bogieSelect.dispatchEvent(new Event("input", { bubbles: true }));
+                bogieSelectUpdated.value = targetCoach.value;
+                bogieSelectUpdated.dispatchEvent(new Event("change", { bubbles: true }));
+                bogieSelectUpdated.dispatchEvent(new Event("input", { bubbles: true }));
                 await sleep(800); // Wait for Angular to re-render coach seat layout
             }
 
             // 4. Find available white seats in target coach (scoped to target card)
             const seatMapContainer = (card && (card.querySelector(".seat-layout, .seat-plan, .seat-map, .bogie-seat-container") || card)) || document;
 
-            // Reconcile already selected seats in this coach
-            const alreadySelected = Array.from(
-                seatMapContainer.querySelectorAll("button.btn-seat, button[data-seat]")
-            ).filter((b) => {
-                const cl = b.className || "";
-                const isSelected = cl.includes("selected") || cl.includes("seat-selected") || b.getAttribute("aria-selected") === "true";
+            // Reconcile already selected seats across the entire page
+            const allSelectedOnPage = Array.from(
+                document.querySelectorAll("button.btn-seat, button[data-seat], .seat-selected, [aria-selected='true']")
+            ).filter(isSeatSelected);
+
+            // Reconcile pre-existing foreign selections (outside target coach or outside target train)
+            const foreignSelections = allSelectedOnPage.filter((b) => {
                 const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
-                return isSelected && txt.startsWith(targetCoach.name + "-");
+                const inCoach = txt.startsWith(targetCoach.name + "-");
+                const inCard = card ? card.contains(b) : true;
+                return !inCoach || !inCard;
             });
 
-            const neededClicks = Math.max(0, seatsNeeded - alreadySelected.length);
+            if (foreignSelections.length > 0) {
+                onStatus(
+                    `Pre-existing seat selection(s) detected outside Coach ${targetCoach.name}. Stopped to avoid split/multi-coach booking.`,
+                    "error"
+                );
+                return false;
+            }
+
+            // Reconcile already selected seats in target coach
+            const alreadySelectedInCoach = allSelectedOnPage.filter((b) => {
+                const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
+                return txt.startsWith(targetCoach.name + "-");
+            });
+
+            if (alreadySelectedInCoach.length > seatsNeeded) {
+                onStatus(
+                    `Excess seats (${alreadySelectedInCoach.length}) already selected in Coach ${targetCoach.name} (only ${seatsNeeded} requested). Stopped to prevent over-booking.`,
+                    "error"
+                );
+                return false;
+            }
+
+            const neededClicks = seatsNeeded - alreadySelectedInCoach.length;
             let seatsToClick = [];
 
             if (neededClicks === 0) {
@@ -684,6 +815,35 @@
                 }
             }
 
+            // CQ-001: Strict Invariant Check before Continue Purchase
+            const finalSelectedOnPage = Array.from(
+                document.querySelectorAll("button.btn-seat, button[data-seat], .seat-selected, [aria-selected='true']")
+            ).filter(isSeatSelected);
+
+            if (finalSelectedOnPage.length !== seatsNeeded) {
+                onStatus(
+                    `Final booking invariant failed: expected exactly ${seatsNeeded} selected seat(s), but found ${finalSelectedOnPage.length}. Aborting purchase handoff.`,
+                    "error"
+                );
+                return false;
+            }
+
+            const finalWrongCoach = finalSelectedOnPage.filter((b) => {
+                const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
+                return !txt.startsWith(targetCoach.name + "-");
+            });
+
+            if (finalWrongCoach.length > 0) {
+                onStatus(
+                    `Final booking invariant failed: selected seats belong to incorrect coach. Aborting purchase handoff.`,
+                    "error"
+                );
+                return false;
+            }
+
+            // Consume one-shot intent now that exact seats are verified locked
+            consumeBookingIntent();
+
             // 5. Click CONTINUE PURCHASE with precise matching
             onStatus(`Seats locked (${seatsNeeded}/${seatsNeeded})! Clicking CONTINUE PURCHASE...`, "running");
             await sleep(300);
@@ -774,16 +934,22 @@
                 btn.textContent = "⚡ Auto-Cutting...";
                 const hudMsg = document.getElementById("hudMsg");
 
-                await runAutoCut((msg, type) => {
+                try {
+                    await runAutoCut((msg, type) => {
+                        if (hudMsg) {
+                            hudMsg.textContent = msg;
+                            hudMsg.className = `hud-msg ${type}`;
+                        }
+                    }, card);
+                } catch (err) {
                     if (hudMsg) {
-                        hudMsg.textContent = msg;
-                        hudMsg.className = `hud-msg ${type}`;
+                        hudMsg.textContent = `Auto-cut error: ${err.message || err}`;
+                        hudMsg.className = "hud-msg error";
                     }
-                    if (type === "error" || type === "success") {
-                        btn.disabled = false;
-                        btn.innerHTML = `⚡ Auto-Cut ${trainTitle} (${currentTargetConfig.seats} Seats)`;
-                    }
-                }, card);
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = `⚡ Auto-Cut ${trainTitle} (${currentTargetConfig.seats} Seats)`;
+                }
             });
 
             // Insert button in header or action area
@@ -898,52 +1064,70 @@
             });
         });
 
+        let isUpdatingHud = false;
+        let lastPopulatedHash = "";
+
         // Populate train cards in dropdown and inject in-card buttons
         function populateTrainCards() {
+            if (isUpdatingHud) return;
             const cards = Array.from(document.querySelectorAll(".single-trip-wrapper, .trip-wrapper"));
             if (cards.length === 0) return;
 
-            // Clear previous options except auto-detect
-            while (hudTrainSelect.options.length > 1) {
-                hudTrainSelect.remove(1);
+            const cardsHash = cards
+                .map((c, idx) => `${cleanTrainCardTitle(c, `Train ${idx + 1}`)}:${getCardSeatCapacity(c, currentTargetConfig.seatClass)}`)
+                .join("|");
+
+            if (cardsHash === lastPopulatedHash && hudTrainSelect.options.length > 1) {
+                return; // Nothing changed, skip DOM re-population
             }
 
-            let bestCardOption = "";
-            let maxSeats = -1;
-
-            cards.forEach((card, idx) => {
-                const title = cleanTrainCardTitle(card, `Train ${idx + 1}`);
-                const num = (title.match(/\b\d{3,4}\b/) || [])[0] || "";
-                const capacity = getCardSeatCapacity(card, currentTargetConfig.seatClass);
-
-                const opt = document.createElement("option");
-                opt.value = num ? `train_num_${num}` : title;
-                opt.textContent = `🚆 ${title} (${capacity} seats)`;
-                hudTrainSelect.appendChild(opt);
-
-                if (capacity > maxSeats) {
-                    maxSeats = capacity;
-                    bestCardOption = opt.value;
+            isUpdatingHud = true;
+            try {
+                // Clear previous options except auto-detect
+                while (hudTrainSelect.options.length > 1) {
+                    hudTrainSelect.remove(1);
                 }
 
-                // Check if this card matches user's configured target
-                if (
-                    (currentTargetConfig.trainNumber && num === currentTargetConfig.trainNumber) ||
-                    (currentTargetConfig.train && title.toUpperCase().includes(currentTargetConfig.train))
-                ) {
-                    opt.selected = true;
-                }
-            });
+                let bestCardOption = "";
+                let maxSeats = -1;
 
-            // Only pre-select best inventory train if user did NOT specify an explicit train target
-            const hasExplicitTarget = Boolean(currentTargetConfig.train || currentTargetConfig.trainNumber);
-            if (!hasExplicitTarget && !hudTrainSelect.value && bestCardOption) {
-                hudTrainSelect.value = bestCardOption;
-            } else if (hasExplicitTarget && !hudTrainSelect.value) {
-                hudMsg.textContent = `Target train "${currentTargetConfig.train || currentTargetConfig.trainNumber}" not found in current search results.`;
+                cards.forEach((card, idx) => {
+                    const title = cleanTrainCardTitle(card, `Train ${idx + 1}`);
+                    const num = (title.match(/\b\d{3,4}\b/) || [])[0] || "";
+                    const capacity = getCardSeatCapacity(card, currentTargetConfig.seatClass);
+
+                    const opt = document.createElement("option");
+                    opt.value = num ? `train_num_${num}` : title;
+                    opt.textContent = `🚆 ${title} (${capacity} seats)`;
+                    hudTrainSelect.appendChild(opt);
+
+                    if (capacity > maxSeats) {
+                        maxSeats = capacity;
+                        bestCardOption = opt.value;
+                    }
+
+                    // Check if this card matches user's configured target
+                    if (
+                        (currentTargetConfig.trainNumber && num === currentTargetConfig.trainNumber) ||
+                        (currentTargetConfig.train && title.toUpperCase().includes(currentTargetConfig.train))
+                    ) {
+                        opt.selected = true;
+                    }
+                });
+
+                // Only pre-select best inventory train if user did NOT specify an explicit train target
+                const hasExplicitTarget = Boolean(currentTargetConfig.train || currentTargetConfig.trainNumber);
+                if (!hasExplicitTarget && !hudTrainSelect.value && bestCardOption) {
+                    hudTrainSelect.value = bestCardOption;
+                } else if (hasExplicitTarget && !hudTrainSelect.value) {
+                    hudMsg.textContent = `Target train "${currentTargetConfig.train || currentTargetConfig.trainNumber}" not found in current search results.`;
+                }
+
+                lastPopulatedHash = cardsHash;
+                injectInCardButtons();
+            } finally {
+                isUpdatingHud = false;
             }
-
-            injectInCardButtons();
         }
 
         // Run population once cards load
@@ -974,7 +1158,33 @@
         }, 800);
 
         let debounceTimer = null;
-        const domObserver = new MutationObserver(() => {
+        const domObserver = new MutationObserver((mutations) => {
+            if (isUpdatingHud) return;
+
+            // CQ-002: Ignore self-mutations caused by HUD or in-card button modifications
+            const isSelfMutation = mutations.every((m) => {
+                const target = m.target;
+                if (!target) return true;
+                if (target.nodeType === 1) {
+                    const el = target;
+                    if (el.closest && (el.closest("#rail-assistant-hud") || el.closest(".trainsolo-in-card-btn"))) {
+                        return true;
+                    }
+                }
+                const addedNodes = Array.from(m.addedNodes || []);
+                const removedNodes = Array.from(m.removedNodes || []);
+                const allNodes = [...addedNodes, ...removedNodes];
+                if (allNodes.length > 0) {
+                    return allNodes.every((n) => {
+                        if (n.nodeType !== 1) return true;
+                        const el = n;
+                        return el.id === "rail-assistant-hud" || el.classList?.contains("trainsolo-in-card-btn") || (el.closest && (el.closest("#rail-assistant-hud") || el.closest(".trainsolo-in-card-btn")));
+                    });
+                }
+                return false;
+            });
+            if (isSelfMutation) return;
+
             if (debounceTimer) clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
                 populateTrainCards();
@@ -1004,24 +1214,31 @@
             hudCutBtn.disabled = true;
             autoDismissSweetAlerts();
 
-            await runAutoCut((msg, type) => {
-                hudMsg.textContent = msg;
-                hudMsg.className = `hud-msg ${type}`;
-                if (type === "running") {
-                    hudBadge.textContent = "Working";
-                    hudBadge.style.background = "#2563eb";
-                }
-                if (type === "success") {
-                    hudBadge.textContent = "OTP Ready";
-                    hudBadge.style.background = "#16a34a";
-                    hudCutBtn.disabled = false;
-                }
-                if (type === "error") {
-                    hudBadge.textContent = "Stopped";
-                    hudBadge.style.background = "#dc2626";
-                    hudCutBtn.disabled = false;
-                }
-            });
+            try {
+                await runAutoCut((msg, type) => {
+                    hudMsg.textContent = msg;
+                    hudMsg.className = `hud-msg ${type}`;
+                    if (type === "running") {
+                        hudBadge.textContent = "Working";
+                        hudBadge.style.background = "#2563eb";
+                    }
+                    if (type === "success") {
+                        hudBadge.textContent = "OTP Ready";
+                        hudBadge.style.background = "#16a34a";
+                    }
+                    if (type === "error") {
+                        hudBadge.textContent = "Stopped";
+                        hudBadge.style.background = "#dc2626";
+                    }
+                });
+            } catch (err) {
+                hudMsg.textContent = `Auto-cut failed: ${err.message || err}`;
+                hudMsg.className = "hud-msg error";
+                hudBadge.textContent = "Stopped";
+                hudBadge.style.background = "#dc2626";
+            } finally {
+                hudCutBtn.disabled = false;
+            }
         });
     }
 
@@ -1062,7 +1279,9 @@
                     hudMsg.textContent = msg;
                     hudMsg.className = `hud-msg ${type}`;
                 }
-            }).then((success) => sendResponse({ success }));
+            })
+                .then((success) => sendResponse({ success: Boolean(success) }))
+                .catch((err) => sendResponse({ success: false, error: err?.message || String(err) }));
             return true;
         }
         if (request.action === "PING") {

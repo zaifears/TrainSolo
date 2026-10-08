@@ -8,6 +8,7 @@ import ApiError from '../../errors/ApiError';
 import status from 'http-status';
 import formatDateShohoz from '../../utils/formatDateShohoz';
 import formatStationNameShohoz from '../../utils/formatStationNameShohoz';
+import { calculateFareWithVat, extractTrainNumber } from './ticket.utils';
 import axiosInstance from '../../helpers/axiosInstance';
 
 const searchTickets = async (
@@ -114,20 +115,8 @@ const searchTickets = async (
                         : Number(seat.seat_counts || 0);
 
                 const baseFare = Number(seat.fare || 0);
-                const vatClasses = [
-                    'AC_B',
-                    'AC_S',
-                    'SNIGDHA',
-                    'F_BERTH',
-                    'F_SEAT',
-                    'F_CHAIR',
-                    'AC_CHAIR',
-                ];
-                const finalFare = vatClasses.includes(seatClass)
-                    ? Math.round(baseFare + baseFare * 0.15)
-                    : baseFare;
-                const trainNumberMatch = curr.trip_number.match(/\b\d{3,4}\b/);
-                const trainNumber = trainNumberMatch ? trainNumberMatch[0] : '';
+                const finalFare = calculateFareWithVat(baseFare, seatClass);
+                const trainNumber = extractTrainNumber(curr.trip_number);
                 const link = `https://eticket.railway.gov.bd/booking/train/search?fromcity=${fromCity}&tocity=${toCity}&doj=${date}&class=${seatClass}&train=${encodeURIComponent(trainName)}&train_number=${encodeURIComponent(trainNumber)}&seats=${minSeatsNeeded}`;
 
                 acc.push({

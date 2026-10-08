@@ -217,12 +217,18 @@ export class SeatMap {
   public async clickSeatOnce(seat: Seat): Promise<{ success: boolean; isContested: boolean }> {
     this.logger.info(`Attempting single click on seat ${seat.coach}-${seat.label}...`);
 
-    let locator = this.page.locator(`button.btn-seat:has-text("${seat.label}")`).first();
+    // Match exact seat identifier or exact seat text to avoid "1" matching "10" or "KA-1" matching "KHA-1"
+    let locator = this.page.locator(`button.btn-seat[data-seat="${seat.coach}-${seat.label}" i], button[data-seat="${seat.coach}-${seat.label}" i]`).first();
     if (!(await locator.isVisible().catch(() => false))) {
-      locator = this.page.locator(`button:has-text("${seat.label}")`).first();
+      locator = this.page.locator(`button.btn-seat[data-seat="${seat.label}" i], button[data-seat="${seat.label}" i]`).first();
     }
     if (!(await locator.isVisible().catch(() => false))) {
-      locator = this.page.getByText(new RegExp(`^${seat.label}$`, 'i')).first();
+      locator = this.page.locator('button.btn-seat, button')
+        .filter({ hasText: new RegExp(`^\\s*(?:${seat.coach}\\s*[-:]\\s*)?${seat.label}\\s*$`, 'i') })
+        .first();
+    }
+    if (!(await locator.isVisible().catch(() => false))) {
+      locator = this.page.getByText(new RegExp(`^\\s*${seat.label}\\s*$`, 'i')).first();
     }
 
     await locator.waitFor({ state: 'visible', timeout: 5000 });

@@ -225,6 +225,18 @@ body {
     align-items: center;
     cursor: pointer;
     user-select: none;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0;
+    font-family: inherit;
+    text-align: left;
+}
+
+.settings-toggle:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+    border-radius: 4px;
 }
 
 .settings-toggle .arrow {

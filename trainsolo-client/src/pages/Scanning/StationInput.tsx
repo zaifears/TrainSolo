@@ -47,6 +47,10 @@ const StationInput = () => {
             })
             .catch((error) => {
                 if (error.response?.status === 401 || error.response?.status === 403) {
+                    removeFromLocalStorage('token');
+                    removeFromLocalStorage('ssdk');
+                    removeFromLocalStorage('uudid');
+                    removeFromLocalStorage('userName');
                     toast.error('Railway session expired. Please reconnect.');
                     navigate('/login');
                 } else {

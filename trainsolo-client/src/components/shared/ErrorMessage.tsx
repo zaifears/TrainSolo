@@ -1,14 +1,17 @@
-import { Label } from '../ui/label';
-
 type TErrorMessageProps = {
     message: string | undefined;
+    id?: string;
 };
 
-const ErrorMessage = ({ message }: TErrorMessageProps) => {
+const ErrorMessage = ({ message, id }: TErrorMessageProps) => {
     if (!message) {
         return null;
     }
-    return <Label className="text-red-600 font-medium">{message}</Label>;
+    return (
+        <p id={id} role="alert" className="text-xs text-red-600 font-medium">
+            {message}
+        </p>
+    );
 };
 
 export default ErrorMessage;

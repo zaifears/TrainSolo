@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  tracker-server:
+  trainsolo:
     build:
-      context: ..
-      dockerfile: trainsolo-server/Dockerfile
-    container_name: train-ticket-tracker-server
+      context: .
+      dockerfile: Dockerfile
+    container_name: trainsolo-service
     restart: unless-stopped
     ports:
       - "5000:5000"

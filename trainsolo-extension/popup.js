@@ -37,6 +37,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const isHidden = settingsBox.classList.contains("hidden");
         settingsBox.classList.toggle("hidden", !isHidden);
         settingsArrow.textContent = isHidden ? "▲" : "▼";
+        settingsToggle.setAttribute("aria-expanded", isHidden ? "true" : "false");
     });
 
     saveUrlBtn.addEventListener("click", async () => {
