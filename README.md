@@ -39,7 +39,7 @@ The system consists of three coordinated components:
    - In-page floating HUD on `eticket.railway.gov.bd` with automatic coach switching, seat selection, cart verification, CONTINUE PURCHASE triggering, and OTP handoff.
 3. **CDP Automation Engine (`seat-selector`)**:
    - Direct Chrome DevTools Protocol automation engine for advanced headless/CDP seat cutting.
-   - Comprehensive test suites (24 tests in `seat-selector`, 40 tests in `trainsolo-server`).
+   - Comprehensive test suites (24 tests in `seat-selector`, 16 tests in `trainsolo-server`).
    - Enforces 15-minute sliding window budget (max 2 clicks per 15 min) to prevent the platform's 1-hour account suspension.
 
 ---

@@ -6,16 +6,31 @@ import type { TScan } from '@/types/scan.type';
 import { type SetStateAction } from 'react';
 import { FaMapMarkerAlt, FaCalendarAlt, FaArrowRight } from 'react-icons/fa';
 
+export type TScanError = {
+    from?: string;
+    to?: string;
+    date?: string;
+    general?: string;
+};
+
 type TStationInputSingleProps = {
     index: number;
     scan: TScan;
+    errors?: TScanError;
+    onFieldChange?: (field: keyof TScan) => void;
 };
 
-const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
+const StationInputSingle = ({
+    index,
+    scan,
+    errors,
+    onFieldChange,
+}: TStationInputSingleProps) => {
     const { scans, setScans } = useTicketContext();
 
     const fromId = `from-station-${index}`;
     const toId = `to-station-${index}`;
+    const dateId = `journey-date-${index}`;
     const classId = `seat-class-${index}`;
     const trainId = `preferred-train-${index}`;
 
@@ -26,6 +41,9 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
         const updatedScans = [...scans];
         updatedScans[index] = { ...updatedScans[index], [field]: value };
         setScans(updatedScans);
+        if (onFieldChange) {
+            onFieldChange(field);
+        }
     };
 
     return (
@@ -34,8 +52,17 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                 {scans.length > 1 ? `Scan ${index + 1}` : 'Journey Route Details'}
             </h3>
 
+            {errors?.general && (
+                <div
+                    role="alert"
+                    className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-semibold"
+                >
+                    ⚠️ {errors.general}
+                </div>
+            )}
+
             <div className="grid md:grid-cols-3 gap-6">
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                     <div className="flex items-center gap-2">
                         <FaMapMarkerAlt className="text-green-500" aria-hidden="true" />
                         <Label htmlFor={fromId} className="text-gray-700 font-medium">
@@ -47,36 +74,75 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                         value={scan.from}
                         setValue={(val) => updateField('from', val)}
                         placeholder="Select departure station"
+                        hasError={!!errors?.from}
+                        ariaDescribedBy={errors?.from ? `${fromId}-error` : undefined}
                     />
+                    {errors?.from && (
+                        <p
+                            id={`${fromId}-error`}
+                            role="alert"
+                            className="text-xs text-red-600 font-medium"
+                        >
+                            {errors.from}
+                        </p>
+                    )}
                 </div>
 
-                <div className="space-y-2 relative">
+                <div className="space-y-1.5 relative">
                     <div className="flex items-center gap-2">
                         <FaMapMarkerAlt className="text-red-500" aria-hidden="true" />
-                        <Label htmlFor={toId} className="text-gray-700 font-medium">To</Label>
+                        <Label htmlFor={toId} className="text-gray-700 font-medium">
+                            To
+                        </Label>
                     </div>
                     <MyAutosuggestInput
                         id={toId}
                         value={scan.to}
                         setValue={(val) => updateField('to', val)}
                         placeholder="Select destination station"
+                        hasError={!!errors?.to}
+                        ariaDescribedBy={errors?.to ? `${toId}-error` : undefined}
                     />
-                    <div className="hidden md:block absolute top-8 -left-5 text-blue-500" aria-hidden="true">
+                    {errors?.to && (
+                        <p
+                            id={`${toId}-error`}
+                            role="alert"
+                            className="text-xs text-red-600 font-medium"
+                        >
+                            {errors.to}
+                        </p>
+                    )}
+                    <div
+                        className="hidden md:block absolute top-8 -left-5 text-blue-500 pointer-events-none"
+                        aria-hidden="true"
+                    >
                         <FaArrowRight className="text-xl" />
                     </div>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                     <div className="flex items-center gap-2">
                         <FaCalendarAlt className="text-blue-500" aria-hidden="true" />
-                        <Label className="text-gray-700 font-medium">
+                        <Label htmlFor={dateId} className="text-gray-700 font-medium">
                             Journey Date
                         </Label>
                     </div>
                     <MyDatePicker
+                        id={dateId}
                         date={scan.date}
                         setDate={(date) => updateField('date', date)}
+                        hasError={!!errors?.date}
+                        ariaDescribedBy={errors?.date ? `${dateId}-error` : undefined}
                     />
+                    {errors?.date && (
+                        <p
+                            id={`${dateId}-error`}
+                            role="alert"
+                            className="text-xs text-red-600 font-medium"
+                        >
+                            {errors.date}
+                        </p>
+                    )}
                 </div>
             </div>
 
@@ -87,10 +153,15 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                     <div className="text-gray-700 font-medium flex items-center justify-between text-sm">
                         <span>Passenger Seats Needed</span>
                         <span className="text-xs text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded">
-                            {scan.seatCount || 1} { (scan.seatCount || 1) > 1 ? 'Seats' : 'Seat' }
+                            {scan.seatCount || 1}{' '}
+                            {(scan.seatCount || 1) > 1 ? 'Seats' : 'Seat'}
                         </span>
                     </div>
-                    <div className="grid grid-cols-4 gap-2" role="group" aria-label="Passenger seat count">
+                    <div
+                        className="grid grid-cols-4 gap-2"
+                        role="group"
+                        aria-label="Passenger seat count"
+                    >
                         {[1, 2, 3, 4].map((count) => {
                             const isSelected = (scan.seatCount || 1) === count;
                             return (
@@ -101,7 +172,7 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                                     onClick={() => updateField('seatCount', count as any)}
                                     className={`py-2 text-sm font-bold rounded-lg border transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2 ${
                                         isSelected
-                                            ? 'bg-[#1ca559] text-white border-[#1ca559] shadow-sm'
+                                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
                                             : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
                                     }`}
                                 >
@@ -110,7 +181,9 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                             );
                         })}
                     </div>
-                    <p className="text-[11px] text-gray-500">Max 4 seats allowed per Bangladesh Railway rules</p>
+                    <p className="text-[11px] text-gray-500">
+                        Max 4 seats allowed per Bangladesh Railway rules
+                    </p>
                 </div>
 
                 {/* Seat Class Selector */}
@@ -122,7 +195,7 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                         id={classId}
                         value={scan.seatClass || 'ANY'}
                         onChange={(e) => updateField('seatClass', e.target.value)}
-                        className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#1ca559]"
+                        className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-800 focus:outline-none focus:ring-2 focus:ring-emerald-600"
                     >
                         <option value="ANY">🌟 Any Available Class (All)</option>
                         <option value="S_CHAIR">💺 Shovon Chair (S_CHAIR)</option>
@@ -134,7 +207,9 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                         <option value="F_SEAT">🎟️ First Class Seat (F_SEAT)</option>
                         <option value="F_CHAIR">🪑 First Class Chair (F_CHAIR)</option>
                     </select>
-                    <p className="text-[11px] text-gray-500">Scanner only alerts you for this specific class</p>
+                    <p className="text-[11px] text-gray-500">
+                        Scanner only alerts you for this specific class
+                    </p>
                 </div>
 
                 {/* Preferred Train Filter (Optional) */}
@@ -148,9 +223,11 @@ const StationInputSingle = ({ index, scan }: TStationInputSingleProps) => {
                         value={scan.preferredTrain || ''}
                         onChange={(e) => updateField('preferredTrain', e.target.value)}
                         placeholder="e.g. Tista, Parjotak, Ekota (Leave blank for all)"
-                        className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1ca559]"
+                        className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-600"
                     />
-                    <p className="text-[11px] text-gray-500">Leave blank to monitor every train on this route</p>
+                    <p className="text-[11px] text-gray-500">
+                        Leave blank to monitor every train on this route
+                    </p>
                 </div>
             </div>
         </div>

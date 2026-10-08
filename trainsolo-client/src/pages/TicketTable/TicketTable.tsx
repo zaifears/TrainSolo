@@ -183,6 +183,7 @@ const TicketTable = () => {
                         const statusCode = (err as { response?: { status?: number } })?.response?.status;
                         if (statusCode === 401 || statusCode === 403) {
                             setIsAuthExpired(true);
+                            setTicketsObj({});
                             setLastErrorMsg('Bangladesh Railway session expired. Please re-authenticate.');
                             return;
                         }
@@ -372,7 +373,7 @@ const TicketTable = () => {
 
         if (!findUnavailable) {
             toast('No unavailable tickets found', {
-                icon: <BsInfoCircleFill size={18} className="text-[#3498db]" />,
+                icon: <BsInfoCircleFill size={18} className="text-sky-500" />,
             });
             return;
         }
@@ -397,9 +398,9 @@ const TicketTable = () => {
     );
     const availableTickets = ticketsArray.filter((t) => t.seats > 0);
     const topAvailableTicket =
-        ticketsWithSufficientSeats.length > 0
+        !isAuthExpired && ticketsWithSufficientSeats.length > 0
             ? [...ticketsWithSufficientSeats].sort((a, b) => b.seats - a.seats)[0]
-            : availableTickets.length > 0
+            : !isAuthExpired && availableTickets.length > 0
               ? [...availableTickets].sort((a, b) => b.seats - a.seats)[0]
               : null;
 
@@ -556,11 +557,12 @@ const TicketTable = () => {
             {/* Transient Error Banner */}
             {lastErrorMsg && !isAuthExpired && (
                 <div
-                    role="alert"
-                    aria-live="assertive"
+                    role="status"
+                    aria-live="polite"
                     className="bg-amber-50 border border-amber-200 text-amber-800 text-xs px-4 py-2.5 rounded-xl text-center"
                 >
-                    ⚠️ {lastErrorMsg} — Displayed inventory may be stale. Scanner will retry in {countdown}s.
+                    <span>⚠️ {lastErrorMsg} — Displayed inventory may be stale. Scanner will retry automatically.</span>
+                    <span aria-hidden="true" className="ml-1 text-amber-600 font-semibold">(retry in {countdown}s)</span>
                 </div>
             )}
 
@@ -587,20 +589,20 @@ const TicketTable = () => {
                             {topAvailableTicket.from} ➔ {topAvailableTicket.to} • Departs {topAvailableTicket.departureDateTime} • ৳{topAvailableTicket.fare}
                         </p>
                     </div>
-                    <a
-                        href={`${topAvailableTicket.link}#autocut=1`}
-                        onClick={() => syncTargetToExtension(topAvailableTicket)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full md:w-auto"
+                    <Button
+                        asChild
+                        size="lg"
+                        className="w-full md:w-auto text-base sm:text-lg font-black bg-amber-400 hover:bg-amber-300 text-gray-900 shadow-2xl px-8 py-7 rounded-xl cursor-pointer hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2 border-2 border-white/40"
                     >
-                        <Button
-                            size="lg"
-                            className="w-full md:w-auto text-base sm:text-lg font-black bg-amber-400 hover:bg-amber-300 text-gray-900 shadow-2xl px-8 py-7 rounded-xl cursor-pointer hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2 border-2 border-white/40"
+                        <a
+                            href={`${topAvailableTicket.link}#autocut=1`}
+                            onClick={() => syncTargetToExtension(topAvailableTicket)}
+                            target="_blank"
+                            rel="noopener noreferrer"
                         >
                             ⚡ AUTO-CUT & GO TO OTP NOW ⚡
-                        </Button>
-                    </a>
+                        </a>
+                    </Button>
                 </div>
             )}
 
@@ -608,7 +610,7 @@ const TicketTable = () => {
             <div className="flex flex-wrap gap-2.5 justify-center">
                 <Button
                     size="sm"
-                    className="bg-[#1ca559] hover:bg-[#167457] text-white cursor-pointer font-semibold shadow-sm"
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer font-semibold shadow-sm"
                     onClick={handleManualScan}
                     disabled={isFetching || isAuthExpired}
                 >
@@ -623,7 +625,7 @@ const TicketTable = () => {
 
                 <Button
                     size="sm"
-                    className="bg-[#df3c4f] hover:bg-red-700 text-white cursor-pointer"
+                    className="bg-destructive hover:bg-destructive/90 text-white cursor-pointer"
                     onClick={handleStop}
                 >
                     <IoStopCircle className="mr-1" />
@@ -632,7 +634,7 @@ const TicketTable = () => {
 
                 <Button
                     size="sm"
-                    className="bg-[#2f6493] hover:bg-[#314c63] text-white cursor-pointer"
+                    className="bg-sky-700 hover:bg-sky-800 text-white cursor-pointer"
                     onClick={handleTestNotificationAudio}
                 >
                     {notificationsEnabled ? (
@@ -651,7 +653,7 @@ const TicketTable = () => {
                 {!notificationsEnabled && (
                     <Button
                         size="sm"
-                        className="bg-[#892bb1] hover:bg-[#722294] text-white cursor-pointer"
+                        className="bg-purple-700 hover:bg-purple-800 text-white cursor-pointer"
                         onClick={handleEnableNotification}
                     >
                         <MdNotifications className="mr-1" />
@@ -704,26 +706,29 @@ const TicketTable = () => {
                             {ticketsArray.map((ticket, index) => (
                                 <TableRow key={`${ticket.trainName}-${ticket.class}-${index}`} className="h-12 hover:bg-gray-50">
                                     <TableCell className="bg-emerald-50/40 font-medium">
-                                        {ticket.seats ? (
-                                            <a
-                                                href={`${ticket.link}#autocut=1`}
-                                                onClick={() => syncTargetToExtension(ticket)}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
+                                        {ticket.seats && !isAuthExpired ? (
+                                            <Button
+                                                asChild
+                                                size="sm"
+                                                className={`cursor-pointer text-white font-bold flex items-center gap-1.5 shadow-sm whitespace-nowrap text-xs px-3 py-1.5 ${
+                                                    ticket.isStale
+                                                        ? 'bg-amber-600 hover:bg-amber-700'
+                                                        : 'bg-emerald-600 hover:bg-emerald-700'
+                                                }`}
                                             >
-                                                <Button
-                                                    size="sm"
-                                                    className={`cursor-pointer text-white font-bold flex items-center gap-1.5 shadow-sm whitespace-nowrap text-xs px-3 py-1.5 ${
-                                                        ticket.isStale
-                                                            ? 'bg-amber-600 hover:bg-amber-700'
-                                                            : 'bg-[#16a34a] hover:bg-[#15803d]'
-                                                    }`}
+                                                <a
+                                                    href={`${ticket.link}#autocut=1`}
+                                                    onClick={() => syncTargetToExtension(ticket)}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
                                                 >
                                                     {ticket.isStale ? '⚠️ Auto-Cut (Stale)' : '⚡ Auto-Cut & OTP'}
-                                                </Button>
-                                            </a>
+                                                </a>
+                                            </Button>
                                         ) : (
-                                            <span className="text-xs text-gray-400 italic">Sold out</span>
+                                            <span className="text-xs text-gray-400 italic">
+                                                {isAuthExpired ? 'Session expired' : 'Sold out'}
+                                            </span>
                                         )}
                                     </TableCell>
                                     <TableCell className="font-bold text-gray-900">
@@ -795,7 +800,7 @@ const TicketTable = () => {
                         <Button
                             onClick={handleManualScan}
                             size="sm"
-                            className="bg-[#1ca559] hover:bg-[#167457] text-white font-semibold px-4 cursor-pointer"
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-4 cursor-pointer"
                             disabled={isFetching || isAuthExpired}
                         >
                             {isFetching ? 'Checking now...' : '⚡ Scan Now (Instant Check)'}

@@ -4,12 +4,16 @@ import type { Dispatch, SetStateAction } from 'react';
 import { citiesOptions } from '@/constants/searchCities';
 import type { TStation } from '@/types/station.type';
 import { Input } from '../ui/input';
+import { cn } from '@/lib/utils';
 
 type TAutoSuggestionInputProps = {
     placeholder: string;
     value: string;
     setValue: Dispatch<SetStateAction<string>>;
     id?: string;
+    hasError?: boolean;
+    ariaInvalid?: boolean;
+    ariaDescribedBy?: string;
 };
 
 const MyAutosuggestInput = ({
@@ -17,6 +21,9 @@ const MyAutosuggestInput = ({
     value,
     setValue,
     id,
+    hasError = false,
+    ariaInvalid,
+    ariaDescribedBy,
 }: TAutoSuggestionInputProps) => {
     const [items, setItems] = useState<TStation[]>([]);
 
@@ -48,8 +55,13 @@ const MyAutosuggestInput = ({
     return (
         <div className="relative w-full">
             <Input
-                className="h-9 text-sm font-normal placeholder:font-light bg-white border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2"
+                className={cn(
+                    'h-9 text-sm font-normal placeholder:font-light bg-white border-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2',
+                    hasError && 'border-red-500 focus-visible:ring-red-500',
+                )}
                 placeholder={placeholder}
+                aria-invalid={ariaInvalid ?? hasError}
+                aria-describedby={ariaDescribedBy}
                 {...getInputProps({ id })}
             />
             <ul
@@ -64,7 +76,7 @@ const MyAutosuggestInput = ({
                             key={index}
                             {...getItemProps({ item, index })}
                             className={`px-3 py-2 cursor-pointer ${
-                                highlightedIndex === index ? 'bg-blue-200' : ''
+                                highlightedIndex === index ? 'bg-sky-100' : ''
                             } ${selectedItem === item ? 'font-bold' : ''}`}
                         >
                             {item.name}

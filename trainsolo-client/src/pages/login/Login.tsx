@@ -47,7 +47,7 @@ const Login = () => {
 
                 <div className="bg-gray-50 p-4 rounded-lg space-y-3">
                     <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0 w-6 h-6 bg-[#1ca559] text-white rounded-full flex items-center justify-center text-sm font-bold">
+                        <div className="flex-shrink-0 w-6 h-6 bg-emerald-600 text-white rounded-full flex items-center justify-center text-sm font-bold">
                             1
                         </div>
                         <div>
@@ -61,7 +61,7 @@ const Login = () => {
                     </div>
 
                     <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0 w-6 h-6 bg-[#1ca559] text-white rounded-full flex items-center justify-center text-sm font-bold">
+                        <div className="flex-shrink-0 w-6 h-6 bg-emerald-600 text-white rounded-full flex items-center justify-center text-sm font-bold">
                             2
                         </div>
                         <div>
@@ -74,23 +74,26 @@ const Login = () => {
                         </div>
                     </div>
                 </div>
-                <Link
-                    to="/instructions/pc-instructions.jpg"
-                    target="_blank"
-                    className="block"
+                <Button
+                    asChild
+                    className="w-full text-base cursor-pointer bg-emerald-600 hover:bg-emerald-700"
                 >
-                    <Button className="w-full text-base cursor-pointer bg-[#1ca559] hover:bg-[#167457]">
+                    <Link
+                        to="/instructions/pc-instructions.jpg"
+                        target="_blank"
+                        className="flex items-center justify-center gap-2"
+                    >
                         <FaChrome className="text-lg" />
                         View Extension Setup Guide
-                    </Button>
-                </Link>
+                    </Link>
+                </Button>
             </div>
 
             <p className="text-sm text-center text-gray-600 pt-3">
                 You can also use{' '}
                 <Link
                     to="/login-advanced"
-                    className="font-semibold text-[#178b4c] hover:text-[#107a40] hover:underline"
+                    className="font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
                 >
                     Advanced Login
                 </Link>{' '}

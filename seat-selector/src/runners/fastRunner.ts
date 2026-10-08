@@ -66,7 +66,6 @@ export class FastRunner {
   /** One full pass. 'retry' = nothing to click yet; 'stop' = hard stop; 'done' = success / handed off. */
   private async attempt(page: DirectCdpPage, firstPass: boolean): Promise<'done' | 'retry' | 'stop'> {
     const { journey, safety } = this.config;
-    const targetClass = journey.classes[0];
 
     // 1. Session & human-verification guard
     const session = await page.evaluate(() => ({
@@ -299,9 +298,10 @@ export class FastRunner {
         available: s.state === 'available',
         selected: s.state === 'selected',
         enabled: true,
-        isWindow,
+        type: isWindow ? 'WINDOW' : 'AISLE',
         row,
         column: col,
+        locatorKey: s.label,
       };
     });
 

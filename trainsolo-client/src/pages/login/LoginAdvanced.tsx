@@ -125,7 +125,7 @@ const LoginAdvanced = () => {
                 <Button
                     type="submit"
                     size="lg"
-                    className="text-base cursor-pointer bg-[#1ca559] hover:bg-[#167457]"
+                    className="text-base cursor-pointer bg-emerald-600 hover:bg-emerald-700"
                 >
                     Save
                 </Button>
@@ -135,7 +135,7 @@ const LoginAdvanced = () => {
                 Prefer automatic sync?{' '}
                 <Link
                     to="/login"
-                    className="font-semibold text-[#178b4c] hover:text-[#107a40] hover:underline"
+                    className="font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
                 >
                     Use TrainSolo Extension
                 </Link>{' '}

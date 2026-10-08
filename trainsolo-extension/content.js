@@ -2,6 +2,30 @@
 (function () {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+    // Strips autocut parameter from hash and query string without triggering a page reload
+    function stripAutocutFromUrl() {
+        try {
+            const currentUrl = new URL(window.location.href);
+            let urlChanged = false;
+            if (currentUrl.searchParams.has("autocut")) {
+                currentUrl.searchParams.delete("autocut");
+                urlChanged = true;
+            }
+            if (currentUrl.hash) {
+                const hashParams = new URLSearchParams(currentUrl.hash.replace(/^#/, ""));
+                if (hashParams.has("autocut")) {
+                    hashParams.delete("autocut");
+                    const newHash = hashParams.toString();
+                    currentUrl.hash = newHash ? `#${newHash}` : "";
+                    urlChanged = true;
+                }
+            }
+            if (urlChanged) {
+                window.history.replaceState(null, "", currentUrl.toString());
+            }
+        } catch (_) {}
+    }
+
     // Consumes one-shot intent so it cannot survive to unrelated searches or subsequent page loads
     function consumeBookingIntent() {
         try {
@@ -21,6 +45,7 @@
                 }
             });
         }
+        stripAutocutFromUrl();
     }
 
     // Normalizes date representations for equivalence checking
@@ -88,6 +113,9 @@
             sessionStorage.setItem("trainsolo_booking_target", JSON.stringify(cached));
             if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
                 chrome.storage.local.set({ trainsolo_booking_target: cached });
+            }
+            if (earlyAutoCut) {
+                stripAutocutFromUrl();
             }
         }
     } catch (_) {}
