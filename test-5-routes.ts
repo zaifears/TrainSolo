@@ -266,7 +266,7 @@ testCases.forEach((tc) => {
         allPassed = false;
     }
 
-    console.log(`  [7] OTP Screen Handoff: 🟢 Pushed purchase and verified readiness.\n`);
+    console.log(`  [7] OTP Handoff Boundary: 🟢 Reached purchase boundary (Manual user OTP input required by design).\n`);
 });
 
 console.log('======================================================================');

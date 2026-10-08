@@ -1,13 +1,33 @@
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { TScan } from '@/types/scan.type';
 import { TicketContext } from './ticket.context';
 
+const STORAGE_KEY = 'trainsolo_scans_config';
+
 const TicketProvider = ({ children }: { children: ReactNode }) => {
-    const [scans, setScans] = useState<TScan[]>([
-        { from: '', to: '', date: undefined },
-    ]);
-    const [inputCount, setInputCount] = useState(1);
+    const [scans, setScans] = useState<TScan[]>(() => {
+        try {
+            const saved = sessionStorage.getItem(STORAGE_KEY);
+            if (saved) {
+                const parsed = JSON.parse(saved) as TScan[];
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    return parsed.map((s) => ({
+                        ...s,
+                        date: s.date ? new Date(s.date) : undefined,
+                    }));
+                }
+            }
+        } catch (_) {}
+        return [{ from: '', to: '', date: undefined }];
+    });
+    const [inputCount, setInputCount] = useState(() => scans.length || 1);
+
+    useEffect(() => {
+        try {
+            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(scans));
+        } catch (_) {}
+    }, [scans]);
 
     const value = {
         scans,

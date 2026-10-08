@@ -283,7 +283,7 @@ export class SeatMap {
   public async readSelectedSeatMapLabels(): Promise<string[]> {
     return await this.page.evaluate(() => {
       const selectedEls = Array.from(
-        document.querySelectorAll('.seat.selected, .selected-seat, [aria-selected="true"], rect.selected')
+        document.querySelectorAll('.seat.selected, .selected-seat, .seat-selected, button.selected, button.seat-selected, [aria-selected="true"], rect.selected')
       );
       return selectedEls.map(el => (el.getAttribute('data-seat') || el.textContent || '').trim()).filter(Boolean);
     });

@@ -1,7 +1,4 @@
 # Production Dockerfile for TrainSolo Unified Service
-# Build with root context: docker build -t trainsolo -f trainsolo-server/Dockerfile .
-# Or docker compose / deployment runners
-
 # Stage 1: Build Client
 FROM node:20-alpine AS client-builder
 WORKDIR /app/client

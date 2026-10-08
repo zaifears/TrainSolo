@@ -57,15 +57,26 @@ const searchTickets = async (
 
     const shohozApiResponse = axiosResponse.data as IShohozApiResponse;
 
+    if (!shohozApiResponse || typeof shohozApiResponse !== 'object') {
+        throw new ApiError(status.BAD_GATEWAY, 'Malformed response from Shohoz upstream API');
+    }
+
+    if (shohozApiResponse.data === undefined) {
+        const errorMsg =
+            (shohozApiResponse as unknown as Record<string, unknown>).message ||
+            'Upstream Shohoz returned an unexpected response structure without data';
+        throw new ApiError(status.BAD_GATEWAY, String(errorMsg));
+    }
+
     // During pre-drop standby (e.g. before 8:00 AM), trains array may be empty.
     // Return empty array so the client continues actively polling without aborting.
-    if (!shohozApiResponse?.data?.trains?.length) {
+    if (!Array.isArray(shohozApiResponse.data?.trains) || shohozApiResponse.data.trains.length === 0) {
         return [];
     }
 
     const minSeatsNeeded = payload.seatCount || 1;
 
-    const result = shohozApiResponse?.data?.trains?.reduce(
+    const result = shohozApiResponse.data.trains.reduce(
         (acc: TMyResponse, curr) => {
             const trainName = curr.trip_number;
             const departureDateTime = curr.departure_date_time;
@@ -96,15 +107,13 @@ const searchTickets = async (
                     return;
                 }
 
-                const seatCount =
-                    seat.seat_counts.online + seat.seat_counts.offline;
+                // Web booking quota strictly comes from online inventory
+                const onlineSeats =
+                    typeof seat.seat_counts?.online === 'number'
+                        ? seat.seat_counts.online
+                        : Number(seat.seat_counts || 0);
 
-                // Only include if sufficient seats exist for the party
-                if (seatCount < minSeatsNeeded) {
-                    return;
-                }
-
-                const baseFare = Number(seat.fare);
+                const baseFare = Number(seat.fare || 0);
                 const vatClasses = [
                     'AC_B',
                     'AC_S',
@@ -131,7 +140,7 @@ const searchTickets = async (
                     to,
                     class: seatClass,
                     fare: finalFare,
-                    seats: seatCount,
+                    seats: onlineSeats,
                     now: new Date(),
                     link,
                 });

@@ -10,7 +10,7 @@ import { TrainCard } from '../railway/trainCard.js';
 import { SeatMap } from '../railway/seatMap.js';
 import { SeatRanker } from '../seats/seatRanker.js';
 import { SelectionVerifier } from '../seats/selectionVerifier.js';
-import { BookingHandover } from '../railway/bookingHandover.js';
+import { BookingHandover, HandoverStatus } from '../railway/bookingHandover.js';
 import { Notifier } from '../notifications/notifier.js';
 import { StateMachine } from './stateMachine.js';
 
@@ -108,7 +108,8 @@ export class RunController {
 
       // 10. REVALIDATING & CLICKING (With strict attempt budgeting for anti-abuse protection)
       let attemptCount = 0;
-      const maxAttempts = Math.min(this.config.safety.maximumSeatClickAttempts, 2); // Hard ceiling at 2 to avoid 1-hr ban
+      // Allow enough attempts for the full party size, capped by maximumSeatClickAttempts
+      const maxAttempts = Math.max(bestCandidate.seats.length, this.config.safety.maximumSeatClickAttempts);
 
       for (const seat of bestCandidate.seats) {
         attemptCount++;
@@ -116,7 +117,7 @@ export class RunController {
           this.sm.transition('SAFETY_STOP');
           throw new Error(
             `Anti-Abuse Safety Stop: Reached ${maxAttempts} seat click attempts.\n` +
-            `Halting to prevent Bangladesh Railway's 1-hour account lockout (triggered at 3 attempts in 15 mins).`
+            `Halting to prevent Bangladesh Railway's account lockout.`
           );
         }
 
@@ -131,7 +132,7 @@ export class RunController {
             this.sm.transition('STALE_SEAT_STATE');
             throw new Error(
               `Contested Seat: Seat ${seat.coach}-${seat.label} was clicked by another passenger and turned GREEN/BOOKED.\n` +
-              `Attempt count: ${attemptCount}/${maxAttempts}. Stopping to protect account from 1-hour lockout.`
+              `Attempt count: ${attemptCount}/${maxAttempts}. Stopping to protect account from lockout.`
             );
           }
           throw new Error(`Click failed on seat ${seat.coach}-${seat.label}.`);
@@ -156,8 +157,18 @@ export class RunController {
       }
 
       // 12. ADVANCE TO OTP MODAL (HANDOVER BOUNDARY)
-      const handover = new BookingHandover(page, this.logger);
-      const handoverResult = await handover.proceedToOtpScreen();
+      let handoverResult: HandoverStatus = {
+        reachedOtp: false,
+        currentUrl: page.url(),
+        otpInputFound: false,
+        holdTimerText: '',
+      };
+      if (this.config.safety.allowContinuePurchase) {
+        const handover = new BookingHandover(page, this.logger);
+        handoverResult = await handover.proceedToOtpScreen();
+      } else {
+        this.logger.info('Safety Boundary: allowContinuePurchase is FALSE. Keeping seats selected in browser without clicking Continue Purchase.');
+      }
 
       // 13. USER_ALERTED
       this.sm.transition('USER_ALERTED');

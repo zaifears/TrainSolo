@@ -36,7 +36,9 @@ const TicketTable = () => {
     const [lastScanTime, setLastScanTime] = useState<string | null>(null);
     const [lastErrorMsg, setLastErrorMsg] = useState<string | null>(null);
     const [notificationsEnabled, setNotificationsEnabled] = useState(
-        Notification.permission === 'granted',
+        typeof window !== 'undefined' &&
+            'Notification' in window &&
+            Notification.permission === 'granted',
     );
 
     const notificationAudio = useRef(new Audio(audio));
@@ -44,53 +46,76 @@ const TicketTable = () => {
     const ticketsObjRef = useRef(ticketsObj);
     ticketsObjRef.current = ticketsObj;
 
+    const inFlightRef = useRef(false);
+    const abortControllerRef = useRef<AbortController | null>(null);
+    const scanRequestIdRef = useRef(0);
+
     // Live Bangladesh Standard Time clock and 7:59:58 AM precision trigger
     const [bstClock, setBstClock] = useState('');
     const [secondsTo8Am, setSecondsTo8Am] = useState<number | null>(null);
     const [isBurstActive, setIsBurstActive] = useState(false);
     const inBurstRef = useRef(false);
 
-    // Redirect to setup if no scans configured
+    // Redirect to setup if no valid scans configured
     useEffect(() => {
-        if (!scans || !scans.length) {
+        if (!scans || !scans.some((s) => s.from && s.to && s.date)) {
             navigate('/');
         }
     }, [scans, navigate]);
 
-    // Core ticket scanning function
+    // Core ticket scanning function with synchronous in-flight guard and AbortController
     const fetchAllTickets = useCallback(async () => {
-        if (!scans || !scans.length) return;
+        if (!scans || !scans.some((s) => s.from && s.to && s.date)) return;
+        if (inFlightRef.current) return;
 
+        inFlightRef.current = true;
         setIsFetching(true);
         setLastErrorMsg(null);
+
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+        const currentRequestId = ++scanRequestIdRef.current;
 
         try {
             await Promise.all(
                 scans.map(async (scan) => {
                     if (!scan.from || !scan.to || !scan.date) return;
                     const formatDate = formatDateToStr(scan.date);
-                    const key = `${scan.from}-${scan.to}-${formatDate}`;
+                    // Disambiguate cache key with class and train filter
+                    const key = `${scan.from}-${scan.to}-${formatDate}-${scan.seatClass || 'ANY'}-${scan.preferredTrain || 'ALL'}`;
 
                     try {
-                        const res = await axiosInstance.post('/tickets', {
+                        const res = await axiosInstance.post(
+                            '/tickets',
+                            {
+                                from: scan.from,
+                                to: scan.to,
+                                date: formatDate,
+                                seatClass: scan.seatClass,
+                                seatCount: scan.seatCount,
+                                preferredTrain: scan.preferredTrain,
+                            },
+                            { signal: abortController.signal }
+                        );
+
+                        if (currentRequestId !== scanRequestIdRef.current) return;
+
+                        const rawTickets = (res.data.data || []) as ITicket[];
+                        const newTickets = rawTickets.map((t) => ({
+                            ...t,
                             from: scan.from,
                             to: scan.to,
-                            date: formatDate,
-                            seatClass: scan.seatClass,
-                            seatCount: scan.seatCount,
-                            preferredTrain: scan.preferredTrain,
-                        });
+                        }));
 
-                        const newTickets = (res.data.data || []) as ITicket[];
-                        const currentOldTickets = [
-                            ...(ticketsObjRef.current[key] || []),
-                        ];
-
+                        const prevTickets = ticketsObjRef.current[key] || [];
                         let newlyFound = false;
                         let bestFound: ITicket | null = null;
 
                         newTickets.forEach((newTicket) => {
-                            const matchOldTicket = currentOldTickets.find(
+                            const matchOldTicket = prevTickets.find(
                                 (old) =>
                                     old.trainName === newTicket.trainName &&
                                     old.class === newTicket.class,
@@ -106,7 +131,6 @@ const TicketTable = () => {
                                 }
                             }
                             if (!matchOldTicket && newTicket.seats > 0) {
-                                currentOldTickets.push(newTicket);
                                 newlyFound = true;
                                 if (!bestFound || newTicket.seats > bestFound.seats) {
                                     bestFound = newTicket;
@@ -115,31 +139,39 @@ const TicketTable = () => {
                         });
 
                         if (newlyFound && bestFound) {
-                            try { notificationAudio.current.play(); } catch (_) {}
+                            notificationAudio.current.play().catch(() => {});
                             newTicketToast(bestFound);
                         }
 
-                        currentOldTickets.forEach((oldTicket) => {
-                            const newTicketMatch = newTickets.find(
-                                (newTicket) =>
-                                    oldTicket.trainName ===
-                                        newTicket.trainName &&
-                                    oldTicket.class === newTicket.class,
-                            );
+                        // Immutable state update: generate fresh ticket objects
+                        const updatedList: ITicket[] = newTickets.map((t) => ({ ...t }));
 
-                            if (newTicketMatch) {
-                                oldTicket.seats = newTicketMatch.seats;
-                                oldTicket.now = newTicketMatch.now;
-                            } else {
-                                oldTicket.seats = 0;
+                        prevTickets.forEach((oldTicket) => {
+                            if (
+                                !updatedList.some(
+                                    (u) =>
+                                        u.trainName === oldTicket.trainName &&
+                                        u.class === oldTicket.class,
+                                )
+                            ) {
+                                updatedList.push({
+                                    ...oldTicket,
+                                    seats: 0,
+                                    now: new Date().toISOString(),
+                                });
                             }
                         });
 
                         setTicketsObj((prev) => ({
                             ...prev,
-                            [key]: currentOldTickets,
+                            [key]: updatedList,
                         }));
                     } catch (err: unknown) {
+                        const isCanceled =
+                            (err as { name?: string })?.name === 'CanceledError' ||
+                            (err as { name?: string })?.name === 'AbortError';
+                        if (isCanceled) return;
+
                         const message =
                             err &&
                             typeof err === 'object' &&
@@ -154,6 +186,7 @@ const TicketTable = () => {
                 }),
             );
         } finally {
+            inFlightRef.current = false;
             setIsInitialLoading(false);
             setIsFetching(false);
             setScanCount((prev) => prev + 1);
@@ -207,21 +240,33 @@ const TicketTable = () => {
         return () => clearInterval(timer);
     }, [fetchAllTickets, isFetching]);
 
-    // Automatic countdown & polling interval
+    // Automatic countdown interval
     useEffect(() => {
         const interval = setInterval(() => {
             if (inBurstRef.current) return;
-            setCountdown((prev) => {
-                if (prev <= 1) {
-                    fetchAllTickets();
-                    return SCAN_INTERVAL_SECONDS;
-                }
-                return prev - 1;
-            });
+            setCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
         }, 1000);
 
         return () => clearInterval(interval);
-    }, [fetchAllTickets]);
+    }, []);
+
+    // Dedicated effect to trigger periodic scans outside the state updater
+    useEffect(() => {
+        if (countdown === 0 && !inBurstRef.current) {
+            setCountdown(SCAN_INTERVAL_SECONDS);
+            fetchAllTickets();
+        }
+    }, [countdown, fetchAllTickets]);
+
+    // Abort in-flight scans on unmount
+    useEffect(() => {
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+            inFlightRef.current = false;
+        };
+    }, []);
 
     const handleManualScan = () => {
         setCountdown(SCAN_INTERVAL_SECONDS);
@@ -229,11 +274,15 @@ const TicketTable = () => {
     };
 
     const handleStop = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+        inFlightRef.current = false;
         navigate('/');
     };
 
     const handleTestNotificationAudio = () => {
-        notificationAudio.current.play();
+        notificationAudio.current.play().catch(() => {});
         if (notificationsEnabled) {
             addNotification({
                 title: 'TrainSolo Alert Test',
@@ -319,15 +368,28 @@ const TicketTable = () => {
         : 'Active Journey';
 
     const syncTargetToExtension = (ticket: ITicket) => {
+        const matchingScan =
+            scans.find((s) => s.from === ticket.from && s.to === ticket.to) ||
+            scans[0];
+        const targetSeats = matchingScan?.seatCount || neededSeats;
+        const targetDate = matchingScan?.date
+            ? formatDateToStr(matchingScan.date)
+            : scans[0]?.date
+              ? formatDateToStr(scans[0].date)
+              : '';
+
         const payload = {
             train: ticket.trainName,
             train_number: ticket.trainNumber || (ticket.trainName.match(/\b\d{3,4}\b/) || [])[0] || '',
-            seats: neededSeats,
+            trainNumber: ticket.trainNumber || (ticket.trainName.match(/\b\d{3,4}\b/) || [])[0] || '',
+            seats: targetSeats,
             class: ticket.class,
+            seatClass: ticket.class,
             from: ticket.from,
             to: ticket.to,
-            date: scans[0]?.date ? formatDateToStr(scans[0].date) : '',
+            date: targetDate,
             autocut: true,
+            autoCut: true,
             timestamp: Date.now(),
         };
         try {

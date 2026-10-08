@@ -63,10 +63,9 @@ export class SeatParser {
                               classStr.includes('unavailable') || 
                               classStr.includes('disabled') ||
                               classStr.includes('seat-in-progress');
-      const isAvailableClass = (classStr.includes('available') || classStr.includes('seat-available')) && !isOccupiedClass;
-      
+      const isAvailableClass = (classStr.includes('available') || classStr.includes('seat-available') || classStr.includes('seat-white')) && !isOccupiedClass;
       const isEnabled = !raw.disabled && !raw.ariaDisabled && !isOccupiedClass;
-      const isAvailable = (isAvailableClass || isEnabled) && !isOccupiedClass;
+      const isAvailable = isAvailableClass && isEnabled;
 
       // 7. Parse seat type (WINDOW, AISLE, etc.) only if reliably indicated
       let type: SeatType = 'UNKNOWN';

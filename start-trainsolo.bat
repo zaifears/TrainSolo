@@ -13,20 +13,38 @@ if "%1"=="-r" goto REBUILD
 if not exist "trainsolo-server\dist\server.js" (
     echo Compiling TrainSolo server...
     call npm run build:server
+    if %ERRORLEVEL% neq 0 (
+        echo [ERROR] Server build failed with error code %ERRORLEVEL%.
+        pause
+        exit /b %ERRORLEVEL%
+    )
 )
 
 if not exist "trainsolo-client\dist\index.html" (
     echo Compiling TrainSolo client...
     call npm run build:client
+    if %ERRORLEVEL% neq 0 (
+        echo [ERROR] Client build failed with error code %ERRORLEVEL%.
+        pause
+        exit /b %ERRORLEVEL%
+    )
 )
 goto LAUNCH
 
 :REBUILD
 echo Force recompiling TrainSolo client and server...
 call npm run build
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Full build failed with error code %ERRORLEVEL%.
+    pause
+    exit /b %ERRORLEVEL%
+)
 
 :LAUNCH
 echo Launching TrainSolo at http://localhost:5000 ...
 start "" /b cmd /c "ping 127.0.0.1 -n 3 >nul & start http://localhost:5000"
 node trainsolo-server\dist\server.js
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Server crashed or exited with error code %ERRORLEVEL%.
+)
 pause

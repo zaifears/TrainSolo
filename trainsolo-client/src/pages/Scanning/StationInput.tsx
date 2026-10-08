@@ -46,8 +46,12 @@ const StationInput = () => {
                 }
             })
             .catch((error) => {
-                console.warn('Background profile check note:', error.message);
-                // Keep session intact so ticket scanning and booking are never interrupted!
+                if (error.response?.status === 401 || error.response?.status === 403) {
+                    toast.error('Railway session expired. Please reconnect.');
+                    navigate('/login');
+                } else {
+                    console.warn('Background profile check note:', error.message);
+                }
             });
     }, [navigate]);
 

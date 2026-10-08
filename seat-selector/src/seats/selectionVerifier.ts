@@ -47,7 +47,14 @@ export class SelectionVerifier {
     // 3. Verify Seat Details panel labels (if panel is present)
     if (seatDetailsLabels.length > 0) {
       for (const seat of intendedSeats) {
-        if (!seatDetailsLabels.some(l => l.toUpperCase().includes(seat.label.toUpperCase()))) {
+        const fullIdentifier = `${seat.coach}-${seat.label}`.toUpperCase();
+        const seatTokenRegex = new RegExp(`(?:^|[^a-zA-Z0-9])${seat.label}(?:$|[^a-zA-Z0-9])`, 'i');
+        const matched = seatDetailsLabels.some((l) => {
+          const upper = l.toUpperCase().trim();
+          return upper === fullIdentifier || upper === seat.label.toUpperCase() || seatTokenRegex.test(upper);
+        });
+
+        if (!matched) {
           mismatches.push(`Intended seat ${seat.coach}-${seat.label} is NOT displayed in Seat Details panel.`);
         }
       }

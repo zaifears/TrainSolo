@@ -40,7 +40,9 @@ export class FastRunner {
     }
     this.logger.info('=================================================================');
 
-    const page = await DirectCdpPage.connect(9222);
+    const cdpUrl = new URL(this.config.cdpEndpoint || 'http://127.0.0.1:9222');
+    const port = parseInt(cdpUrl.port || '9222', 10);
+    const page = await DirectCdpPage.connect(port);
     try {
       let firstPass = true;
       while (true) {
@@ -273,16 +275,17 @@ export class FastRunner {
     const sorted = [...available].sort((a, b) => a.num - b.num);
     for (let i = 0; i + needed <= sorted.length; i++) {
       const run = sorted.slice(i, i + needed);
-      if (run[needed - 1].num - run[0].num === needed - 1) return run;
+      const isConsecutive = run[needed - 1].num - run[0].num === needed - 1;
+      const sameRow = Math.floor((run[0].num - 1) / 4) === Math.floor((run[needed - 1].num - 1) / 4);
+      if (isConsecutive && (sameRow || prefs.allowSameCoachFallback)) return run;
     }
     if (!prefs.requireAdjacent || prefs.allowSameCoachFallback) return sorted.slice(0, needed);
     return [];
   }
 
   /**
-   * Clicks once and polls up to 4s for the outcome. Success is confirmed by the seat's class OR the
-   * fare total increasing (the exact "selected" class name has not been observed live yet, so the
-   * fare total is the authoritative signal).
+   * Clicks once and polls up to 4.5s for the outcome. Success is confirmed by the seat's class OR
+   * appearance in the seat summary panel alongside fare total.
    */
   private async clickSeat(page: DirectCdpPage, label: string): Promise<'selected' | 'contested' | 'unknown'> {
     const before = await page.evaluate(() => {
@@ -309,13 +312,18 @@ export class FastRunner {
         if (!b) return 'contested';
         if (/seat-booked|seat-in-progress/.test(b.className)) return 'contested';
 
-        // Check selected indicators: class, attribute, or fare total increase
+        // Check selected indicators: class, attribute
         if (/selected|seat-selected/.test(b.className) || b.getAttribute('aria-selected') === 'true') return 'selected';
+
+        // Direct seat panel verification
+        const detailsText = document.querySelector('.seat-details, .passenger-details, .booking-summary, .selected-seats')?.textContent || '';
+        const seatTokenRegex = new RegExp(`(?:^|[^a-zA-Z0-9])${l}(?:$|[^a-zA-Z0-9])`, 'i');
+        if (seatTokenRegex.test(detailsText)) return 'selected';
 
         const el = document.querySelector('.total-amount, .trip-fare-details, .fare-details') || document.body;
         const m = (el.textContent || '').match(/Total:\s*৳\s*([\d,]+)/);
         const currTotal = m ? +m[1].replace(/,/g, '') : 0;
-        if (currTotal > prevTotal) return 'selected';
+        if (currTotal > prevTotal && seatTokenRegex.test(detailsText)) return 'selected';
 
         return 'pending';
       }, { l: label, prevTotal: before });

@@ -2,13 +2,20 @@
   "name": "trainsolo",
   "version": "1.0.0",
   "description": "TrainSolo - Unified Bangladesh Railway Seat Tracking & One-Click Booking Assistant",
+  "workspaces": [
+    "trainsolo-client",
+    "trainsolo-server",
+    "seat-selector"
+  ],
   "scripts": {
+    "install:all": "npm install --prefix trainsolo-client && npm install --prefix trainsolo-server && npm install --prefix seat-selector",
     "build:client": "npm run build --prefix trainsolo-client",
     "build:server": "npm run build --prefix trainsolo-server",
     "build": "npm run build:client && npm run build:server",
     "start": "npm run start --prefix trainsolo-server",
     "dev:client": "npm run dev --prefix trainsolo-client",
-    "dev:server": "npm run dev --prefix trainsolo-server"
+    "dev:server": "npm run dev --prefix trainsolo-server",
+    "test": "npm run test --prefix trainsolo-server"
   },
   "keywords": ["bangladesh-railway", "trainsolo", "ticket-tracker"],
   "author": "",

@@ -91,14 +91,14 @@ document.addEventListener("DOMContentLoaded", async () => {
                 const res = evalResult.result;
                 extractedKeys = res;
 
-                if (res.hasToken) {
+                if (res.hasToken && res.hasSsdk && res.hasUudid) {
                     sessionBadge.textContent = "Connected";
                     sessionBadge.className = "badge badge-connected";
                     userNameEl.textContent = res.userName || "Authenticated";
 
                     tokenStatus.className = "dot dot-green";
-                    ssdkStatus.className = res.hasSsdk ? "dot dot-green" : "dot dot-red";
-                    uudidStatus.className = res.hasUudid ? "dot dot-green" : "dot dot-red";
+                    ssdkStatus.className = "dot dot-green";
+                    uudidStatus.className = "dot dot-green";
 
                     autoCutBtn.disabled = false;
 
@@ -107,6 +107,16 @@ document.addEventListener("DOMContentLoaded", async () => {
                         bdTrainSSDK: res.ssdk,
                         bdTrainUUDID: res.uudid
                     });
+                } else if (res.hasToken) {
+                    sessionBadge.textContent = "Partial Session";
+                    sessionBadge.className = "badge badge-disconnected";
+                    userNameEl.textContent = "Refresh Railway tab to sync device keys";
+
+                    tokenStatus.className = "dot dot-green";
+                    ssdkStatus.className = res.hasSsdk ? "dot dot-green" : "dot dot-red";
+                    uudidStatus.className = res.hasUudid ? "dot dot-green" : "dot dot-red";
+
+                    autoCutBtn.disabled = true;
                 } else {
                     sessionBadge.textContent = "Not Logged In";
                     sessionBadge.className = "badge badge-disconnected";

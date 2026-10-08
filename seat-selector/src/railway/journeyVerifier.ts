@@ -25,21 +25,31 @@ export class JourneyVerifier {
     const toParam = url.searchParams.get('tocity') || '';
     const dojParam = url.searchParams.get('doj') || '';
 
-    if (fromParam && !fromParam.toLowerCase().includes(journey.from.toLowerCase()) && !journey.from.toLowerCase().includes(fromParam.toLowerCase())) {
-      throw new Error(`Journey Origin Mismatch: Expected '${journey.from}', but URL specifies '${fromParam}'`);
+    if (dojParam) {
+      const cleanUrlDoj = dojParam.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const cleanJourneyDate = journey.date.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!cleanUrlDoj.includes(cleanJourneyDate) && !cleanJourneyDate.includes(cleanUrlDoj)) {
+        throw new Error(`Journey Date Mismatch: Expected '${journey.date}', but URL specifies '${dojParam}'`);
+      }
     }
 
-    if (toParam && !toParam.toLowerCase().includes(journey.to.toLowerCase()) && !journey.to.toLowerCase().includes(toParam.toLowerCase())) {
-      throw new Error(`Journey Destination Mismatch: Expected '${journey.to}', but URL specifies '${toParam}'`);
-    }
-
-    // Check page text for stations
-    const pageText = await this.page.textContent('body') || '';
+    // Check page text and search form for stations
+    const pageText = (await this.page.textContent('body')) || '';
     const originFound = pageText.toLowerCase().includes(journey.from.toLowerCase());
     const destFound = pageText.toLowerCase().includes(journey.to.toLowerCase());
 
     if (!originFound || !destFound) {
-      this.logger.warn(`Origin (${journey.from}) or Destination (${journey.to}) not clearly observed in page text. Checking search form...`);
+      const formHasStations = await this.page.evaluate(({ from, to }) => {
+        const inputs = Array.from(document.querySelectorAll('input, select, .station-name, .city-name, span'));
+        const text = inputs.map((i) => (i as HTMLInputElement).value || i.textContent || '').join(' ').toLowerCase();
+        return text.includes(from.toLowerCase()) && text.includes(to.toLowerCase());
+      }, { from: journey.from, to: journey.to });
+
+      if (!formHasStations) {
+        throw new Error(
+          `Journey Verification Failed: Could not positively verify stations '${journey.from}' and '${journey.to}' on the page.`
+        );
+      }
     }
 
     this.logger.info('Journey context verified successfully.');

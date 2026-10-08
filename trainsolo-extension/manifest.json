@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "TrainSolo Assistant",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "description": "TrainSolo: Railway authentication sync, availability HUD, and one-click seat assistant",
     "permissions": ["storage", "scripting", "tabs"],
     "host_permissions": [

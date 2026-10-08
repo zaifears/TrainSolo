@@ -16,12 +16,28 @@
         const earlyAutoCut = location.hash.includes("autocut=1") || location.search.includes("autocut=1");
 
         if (earlyTrain || earlySeats || earlyClass || earlyAutoCut) {
+            let existing = {};
+            try {
+                const raw = sessionStorage.getItem("trainsolo_booking_target");
+                if (raw) existing = JSON.parse(raw);
+            } catch (_) {}
+
+            const mergedTrain = earlyTrain || existing.train || "";
+            const mergedTrainNum =
+                earlyTrainNum || existing.train_number || existing.trainNumber || (mergedTrain.match(/\b\d{3,4}\b/) || [])[0] || "";
+            const mergedSeats = (earlySeats > 0 ? earlySeats : null) || existing.seats || null;
+            const mergedClass = earlyClass || existing.class || existing.seatClass || "";
+            const mergedAutoCut = earlyAutoCut || existing.autocut || existing.autoCut || false;
+
             const cached = {
-                train: earlyTrain,
-                train_number: earlyTrainNum,
-                seats: earlySeats > 0 ? earlySeats : null,
-                class: earlyClass,
-                autocut: earlyAutoCut,
+                train: mergedTrain,
+                train_number: mergedTrainNum,
+                trainNumber: mergedTrainNum,
+                seats: mergedSeats,
+                class: mergedClass,
+                seatClass: mergedClass,
+                autocut: mergedAutoCut,
+                autoCut: mergedAutoCut,
                 timestamp: Date.now(),
             };
             sessionStorage.setItem("trainsolo_booking_target", JSON.stringify(cached));
@@ -173,10 +189,10 @@
                 if (rawSession) {
                     const s = JSON.parse(rawSession);
                     if (!train && s.train) train = s.train;
-                    if (!trainNumber && s.train_number) trainNumber = s.train_number;
+                    if (!trainNumber && (s.train_number || s.trainNumber)) trainNumber = s.train_number || s.trainNumber;
                     if (!seats && s.seats) seats = s.seats;
-                    if (!seatClass && s.class) seatClass = s.class;
-                    if (s.autocut) autoCut = true;
+                    if (!seatClass && (s.class || s.seatClass)) seatClass = s.class || s.seatClass;
+                    if (s.autocut || s.autoCut) autoCut = true;
                 }
             } catch (_) {}
         }
@@ -188,10 +204,10 @@
                 const t = storage.trainsolo_booking_target;
                 if (t && Date.now() - (t.timestamp || 0) < 60 * 60 * 1000) {
                     if (!train && t.train) train = t.train;
-                    if (!trainNumber && t.train_number) trainNumber = t.train_number;
+                    if (!trainNumber && (t.train_number || t.trainNumber)) trainNumber = t.train_number || t.trainNumber;
                     if (!seats && t.seats) seats = t.seats;
-                    if (!seatClass && t.class) seatClass = t.class;
-                    if (t.autocut) autoCut = true;
+                    if (!seatClass && (t.class || t.seatClass)) seatClass = t.class || t.seatClass;
+                    if (t.autocut || t.autoCut) autoCut = true;
                 }
             } catch (_) {}
         }
@@ -233,12 +249,14 @@
     function findTargetTrainCard(cards, targetTrain, targetTrainNumber) {
         if (!cards || cards.length === 0) return null;
 
-        // 0. Active User Context: If user already expanded or opened #select-bogie
-        const activeDropdown = document.querySelector("#select-bogie");
-        if (activeDropdown) {
-            const userOpenedCard = activeDropdown.closest(".single-trip-wrapper, .trip-wrapper");
-            if (userOpenedCard && cards.includes(userOpenedCard)) {
-                return userOpenedCard;
+        // 0. Active User Context: Only fallback to an already-opened card if no explicit train was targeted
+        if (!targetTrain && !targetTrainNumber) {
+            const activeDropdown = document.querySelector("#select-bogie");
+            if (activeDropdown) {
+                const userOpenedCard = activeDropdown.closest(".single-trip-wrapper, .trip-wrapper");
+                if (userOpenedCard && cards.includes(userOpenedCard)) {
+                    return userOpenedCard;
+                }
             }
         }
 
@@ -325,326 +343,416 @@
         seatClass: "",
     };
 
+    let isAutoCutRunning = false;
+
     // Auto-Cut Execution Logic
     async function runAutoCut(onStatus, forcedCard = null) {
-        onStatus("Checking 15-minute click budget...", "running");
-        const { remaining } = await getRemainingBudget();
-        if (remaining <= 0) {
-            onStatus("Click budget reached (16 clicks / 15 min). Wait to prevent account lock.", "error");
+        if (isAutoCutRunning) {
+            onStatus("Auto-Cut is already in progress. Please wait...", "running");
             return false;
         }
 
-        autoDismissSweetAlerts();
-
-        // 1. Wait for train search results to load
-        onStatus("Waiting for train search results to load...", "running");
-        let cards = [];
-        let cardWaitTries = 0;
-        while (cards.length === 0 && cardWaitTries < 60) {
-            cards = Array.from(document.querySelectorAll(".single-trip-wrapper, .trip-wrapper"));
-            if (cards.length > 0) break;
-            await sleep(250);
-            cardWaitTries++;
-        }
-
-        if (!cards.length) {
-            onStatus("No train cards rendered on page. Please verify your search route.", "error");
-            return false;
-        }
-
-        // Get effective target (from in-page HUD selection or stored config)
-        const hudTrainSelect = document.getElementById("hudTrainSelect");
-        let selectedTrainFromHud = hudTrainSelect ? hudTrainSelect.value : "";
-        let seatsNeeded = currentTargetConfig.seats || 1;
-        let targetClass = currentTargetConfig.seatClass || "";
-        let targetTrain = selectedTrainFromHud || currentTargetConfig.train;
-        let targetTrainNumber = currentTargetConfig.trainNumber || (targetTrain.match(/\b\d{3,4}\b/) || [])[0] || "";
-
-        console.log(`[TrainSolo] Executing Auto-Cut: Train="${targetTrain}" (#${targetTrainNumber}), Seats=${seatsNeeded}, Class="${targetClass}"`);
-
-        // Target train card selection
-        let card = forcedCard;
-
-        if (!card && (targetTrain || targetTrainNumber)) {
-            card = findTargetTrainCard(cards, targetTrain, targetTrainNumber);
-        }
-
-        // Strict No-Fallback: If a specific train was targeted and not found, NEVER pick cards[0]!
-        if (!card && (targetTrain || targetTrainNumber)) {
-            const availableNames = cards
-                .map((c) => (c.querySelector(".train-name, .trip-name, h2, h3, h4")?.textContent || "").trim())
-                .filter(Boolean)
-                .slice(0, 5)
-                .join(", ");
-            onStatus(
-                `🛑 Target train "${targetTrain || targetTrainNumber}" not found on page! Available: [${availableNames || "None"}]. Aborted to prevent wrong train booking!`,
-                "error"
-            );
-            return false;
-        }
-
-        // Smart Fallback (Only if NO target was ever specified anywhere):
-        // Filter cards that have >= seatsNeeded seats and pick the one with MAXIMUM inventory!
-        if (!card) {
-            const capableCards = cards.filter((c) => getCardSeatCapacity(c, targetClass) >= seatsNeeded);
-            if (capableCards.length > 0) {
-                capableCards.sort(
-                    (a, b) => getCardSeatCapacity(b, targetClass) - getCardSeatCapacity(a, targetClass)
+        isAutoCutRunning = true;
+        try {
+            const seatsNeeded = currentTargetConfig.seats || 1;
+            onStatus("Checking 15-minute click budget...", "running");
+            const { remaining } = await getRemainingBudget();
+            if (remaining < seatsNeeded) {
+                onStatus(
+                    `Insufficient click budget (${remaining} remaining, need ${seatsNeeded}). Wait for 15-minute cooldown to prevent Shohoz account lockout.`,
+                    "error"
                 );
-                card = capableCards[0];
-            } else {
-                card = cards.find(
-                    (c) => c.querySelector("#select-bogie") || c.querySelector(".book-now-btn:not(:disabled)")
-                ) || cards[0];
+                return false;
             }
-        }
 
-        // Focus & highlight target train card
-        if (card) {
-            try {
-                card.scrollIntoView({ behavior: "smooth", block: "center" });
-                card.style.outline = "4px solid #16a34a";
-                card.style.boxShadow = "0 0 25px rgba(22, 163, 74, 0.5)";
-                card.style.borderRadius = "12px";
-                card.style.transition = "all 0.3s ease";
-            } catch (_) {}
-        }
+            autoDismissSweetAlerts();
 
-        let seatMapOpen = Boolean(document.querySelector("#select-bogie") || (card && card.querySelector("#select-bogie")));
+            // 1. Wait for train search results to load
+            onStatus("Waiting for train search results to load...", "running");
+            let cards = [];
+            let cardWaitTries = 0;
+            while (cards.length === 0 && cardWaitTries < 60) {
+                cards = Array.from(document.querySelectorAll(".single-trip-wrapper, .trip-wrapper"));
+                if (cards.length > 0) break;
+                await sleep(250);
+                cardWaitTries++;
+            }
 
-        if (!seatMapOpen && card) {
-            onStatus("Targeting BOOK NOW button for requested class...", "running");
+            if (!cards.length) {
+                onStatus("No train cards rendered on page. Please verify your search route.", "error");
+                return false;
+            }
 
-            const allCandidates = Array.from(card.querySelectorAll("button, a.btn, a.book-now-btn, input[type='button']"));
+            // Get effective target: preserve explicit config over unselected HUD dropdown options
+            const hudTrainSelect = document.getElementById("hudTrainSelect");
+            let selectedTrainFromHud = hudTrainSelect ? hudTrainSelect.value : "";
+            let targetClass = currentTargetConfig.seatClass || "";
+            let targetTrain = currentTargetConfig.train;
+            let targetTrainNumber = currentTargetConfig.trainNumber;
 
-            const validBookButtons = allCandidates.filter((btn) => {
-                const text = (btn.textContent || btn.value || "").trim().toUpperCase();
-                const classes = btn.className.toLowerCase();
+            if (!targetTrain && !targetTrainNumber && selectedTrainFromHud) {
+                if (selectedTrainFromHud.startsWith("train_num_")) {
+                    targetTrainNumber = selectedTrainFromHud.replace("train_num_", "");
+                } else {
+                    targetTrain = selectedTrainFromHud;
+                }
+            }
 
-                if (
-                    text.includes("ROUTE") ||
-                    text.includes("DETAIL") ||
-                    text.includes("SCHEDULE") ||
-                    text.includes("VIEW") ||
-                    text.includes("ম্যাপ") ||
-                    classes.includes("route") ||
-                    classes.includes("detail")
-                ) {
+            if (!targetTrainNumber && targetTrain) {
+                const m = targetTrain.match(/\b\d{3,4}\b/);
+                if (m) targetTrainNumber = m[0];
+            }
+
+            console.log(
+                `[TrainSolo] Executing Auto-Cut: Train="${targetTrain}" (#${targetTrainNumber}), Seats=${seatsNeeded}, Class="${targetClass}"`
+            );
+
+            // Target train card selection
+            let card = forcedCard;
+
+            if (!card && (targetTrain || targetTrainNumber)) {
+                card = findTargetTrainCard(cards, targetTrain, targetTrainNumber);
+            }
+
+            // Strict No-Fallback: If a specific train was targeted and not found, NEVER pick cards[0]!
+            if (!card && (targetTrain || targetTrainNumber)) {
+                const availableNames = cards
+                    .map((c) => (c.querySelector(".train-name, .trip-name, h2, h3, h4")?.textContent || "").trim())
+                    .filter(Boolean)
+                    .slice(0, 5)
+                    .join(", ");
+                onStatus(
+                    `🛑 Target train "${targetTrain || targetTrainNumber}" not found on page! Available: [${availableNames || "None"}]. Stopped to avoid booking wrong train.`,
+                    "error"
+                );
+                return false;
+            }
+
+            // Fallback only if NO target train was specified at all
+            if (!card) {
+                const capableCards = cards.filter((c) => getCardSeatCapacity(c, targetClass) >= seatsNeeded);
+                if (capableCards.length > 0) {
+                    capableCards.sort(
+                        (a, b) => getCardSeatCapacity(b, targetClass) - getCardSeatCapacity(a, targetClass)
+                    );
+                    card = capableCards[0];
+                } else {
+                    card =
+                        cards.find(
+                            (c) => c.querySelector("#select-bogie") || c.querySelector(".book-now-btn:not(:disabled)")
+                        ) || cards[0];
+                }
+            }
+
+            // Focus & highlight target train card
+            if (card) {
+                try {
+                    card.scrollIntoView({ behavior: "smooth", block: "center" });
+                    card.style.outline = "4px solid #16a34a";
+                    card.style.boxShadow = "0 0 25px rgba(22, 163, 74, 0.5)";
+                    card.style.borderRadius = "12px";
+                    card.style.transition = "all 0.3s ease";
+                } catch (_) {}
+            }
+
+            // 2. Open seat map (scoped strictly to target card)
+            let seatMapOpen = Boolean(card && card.querySelector("#select-bogie"));
+
+            if (!seatMapOpen && card) {
+                onStatus(`Targeting BOOK NOW button for class ${targetClass || "Any"}...`, "running");
+
+                const allCandidates = Array.from(card.querySelectorAll("button, a.btn, a.book-now-btn, input[type='button']"));
+                const validBookButtons = allCandidates.filter((btn) => {
+                    const text = (btn.textContent || btn.value || "").trim().toUpperCase();
+                    const classes = btn.className.toLowerCase();
+
+                    if (
+                        text.includes("ROUTE") ||
+                        text.includes("DETAIL") ||
+                        text.includes("SCHEDULE") ||
+                        text.includes("VIEW") ||
+                        text.includes("ম্যাপ") ||
+                        classes.includes("route") ||
+                        classes.includes("detail")
+                    ) {
+                        return false;
+                    }
+
+                    return (
+                        classes.includes("book-now") ||
+                        classes.includes("book_now") ||
+                        text.includes("BOOK NOW") ||
+                        text.includes("BOOK") ||
+                        text.includes("বুক")
+                    );
+                });
+
+                let bookNowBtn = null;
+                if (targetClass && targetClass !== "ANY" && validBookButtons.length > 0) {
+                    for (const btn of validBookButtons) {
+                        const row = btn.closest("tr, .trip-seat-class, .seat-class-row, .single-seat-class, li, div[class*='class']");
+                        const rowText = row ? row.textContent || "" : "";
+                        if (row && matchesSeatClass(rowText, targetClass)) {
+                            bookNowBtn = btn;
+                            break;
+                        }
+                    }
+                } else if (!targetClass || targetClass === "ANY") {
+                    bookNowBtn = validBookButtons.find((b) => !b.disabled) || validBookButtons[0];
+                }
+
+                if (!bookNowBtn || bookNowBtn.disabled) {
+                    onStatus(
+                        `No available Book Now button found for requested class ${targetClass || "Any"} on this train. Stopped to prevent booking wrong class.`,
+                        "error"
+                    );
                     return false;
                 }
 
-                return (
-                    classes.includes("book-now") ||
-                    classes.includes("book_now") ||
-                    text.includes("BOOK NOW") ||
-                    text.includes("BOOK") ||
-                    text.includes("বুক")
+                onStatus(`Clicking BOOK NOW (${bookNowBtn.textContent.trim()})...`, "running");
+                bookNowBtn.click();
+                onStatus("Opened seat map. Loading coaches...", "running");
+
+                let waitTries = 0;
+                while (!(card && card.querySelector("#select-bogie")) && waitTries < 60) {
+                    await sleep(150);
+                    waitTries++;
+                }
+            }
+
+            // 3. Select coach with vacant seats (scoped strictly to target card)
+            const bogieSelect = card ? card.querySelector("#select-bogie") : null;
+            if (!bogieSelect) {
+                onStatus("Coach dropdown (#select-bogie) not found in target train card.", "error");
+                return false;
+            }
+
+            const options = Array.from(bogieSelect.options)
+                .filter((o) => {
+                    const text = (o.text || "").trim().toLowerCase();
+                    return text && !text.includes("select coach") && !text.includes("বগি নির্বাচন");
+                })
+                .map((o) => {
+                    const text = o.text.trim();
+                    const m =
+                        text.match(/([A-Z0-9_\u0980-\u09FF]+)\s*(?:-|:)\s*(\d+)\s*Seat/i) ||
+                        text.match(/([A-Z0-9_\u0980-\u09FF]+)\s*\((\d+)\)/i);
+                    let count = 0;
+                    if (m) {
+                        count = parseInt(m[2], 10);
+                    } else {
+                        const countOnly = text.match(/(\d+)\s*Seat/i) || text.match(/\((\d+)\)/);
+                        count = countOnly ? parseInt(countOnly[1], 10) : 0;
+                    }
+                    const name = m ? m[1].toUpperCase() : text.split(/[-:(]/)[0].trim().toUpperCase();
+                    return {
+                        name,
+                        count,
+                        value: o.value,
+                    };
+                });
+
+            if (options.length === 0) {
+                onStatus("No valid coach options found in coach dropdown.", "error");
+                return false;
+            }
+
+            // Capable coaches must accommodate full party size
+            const capableCoaches = options.filter((o) => o.count >= seatsNeeded).sort((a, b) => b.count - a.count);
+
+            let targetCoach = null;
+            if (capableCoaches.length > 0) {
+                targetCoach = capableCoaches[0];
+            } else {
+                onStatus(
+                    `Cannot accommodate full requested party of ${seatsNeeded} seat(s) in any single coach for this train. Stopped to avoid split/partial booking.`,
+                    "error"
                 );
+                return false;
+            }
+
+            if (bogieSelect.value !== targetCoach.value) {
+                onStatus(`Switching to Coach ${targetCoach.name} (${targetCoach.count} seats)...`, "running");
+                bogieSelect.value = targetCoach.value;
+                bogieSelect.dispatchEvent(new Event("change", { bubbles: true }));
+                bogieSelect.dispatchEvent(new Event("input", { bubbles: true }));
+                await sleep(800); // Wait for Angular to re-render coach seat layout
+            }
+
+            // 4. Find available white seats in target coach (scoped to target card)
+            const seatMapContainer = (card && (card.querySelector(".seat-layout, .seat-plan, .seat-map, .bogie-seat-container") || card)) || document;
+
+            // Reconcile already selected seats in this coach
+            const alreadySelected = Array.from(
+                seatMapContainer.querySelectorAll("button.btn-seat, button[data-seat]")
+            ).filter((b) => {
+                const cl = b.className || "";
+                const isSelected = cl.includes("selected") || cl.includes("seat-selected") || b.getAttribute("aria-selected") === "true";
+                const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
+                return isSelected && txt.startsWith(targetCoach.name + "-");
             });
 
-            let bookNowBtn = null;
-            if (targetClass && validBookButtons.length > 0) {
-                for (const btn of validBookButtons) {
-                    const row = btn.closest("tr, .trip-seat-class, .seat-class-row, .single-seat-class, li, div[class*='class']");
-                    const rowText = row ? row.textContent || "" : "";
-                    if (row && matchesSeatClass(rowText, targetClass)) {
-                        bookNowBtn = btn;
-                        break;
+            const neededClicks = Math.max(0, seatsNeeded - alreadySelected.length);
+            let seatsToClick = [];
+
+            if (neededClicks === 0) {
+                onStatus(`All ${seatsNeeded} requested seat(s) already selected in Coach ${targetCoach.name}.`, "running");
+            } else {
+                onStatus(`Scanning vacant seats in Coach ${targetCoach.name} (Need ${neededClicks} more seat(s))...`, "running");
+                let availableSeats = [];
+                let scanTries = 0;
+                while (availableSeats.length < neededClicks && scanTries < 40) {
+                    const allSeatBtns = Array.from(seatMapContainer.querySelectorAll("button.btn-seat, button[data-seat]"));
+                    let coachScopedBtns = allSeatBtns.filter((b) => {
+                        const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
+                        return txt.startsWith(targetCoach.name + "-");
+                    });
+
+                    // Never fall back to allSeatBtns; wait for coach seat buttons to render
+                    if (coachScopedBtns.length === 0) {
+                        await sleep(150);
+                        scanTries++;
+                        continue;
+                    }
+
+                    availableSeats = coachScopedBtns.filter((b) => {
+                        const cl = b.className || "";
+                        const txt = (b.textContent || b.getAttribute("data-seat") || "").trim();
+                        // Require positive indication of availability
+                        const isAvailableClass =
+                            cl.includes("seat-available") ||
+                            cl.includes("seat-white") ||
+                            cl.includes("white");
+                        const isNotOccupied = !/seat-booked|seat-in-progress|selected|booked|occupied/i.test(cl);
+                        return isAvailableClass && isNotOccupied && !b.disabled && txt.length > 0;
+                    });
+
+                    if (availableSeats.length >= neededClicks) break;
+                    await sleep(150);
+                    scanTries++;
+                }
+
+                if (availableSeats.length < neededClicks) {
+                    onStatus(
+                        `Only found ${availableSeats.length} available seat(s) in Coach ${targetCoach.name} (needed ${neededClicks}). Stopped to prevent partial booking.`,
+                        "error"
+                    );
+                    return false;
+                }
+
+                seatsToClick = availableSeats.slice(0, neededClicks);
+                onStatus(`Selecting ${seatsToClick.length} seat(s) in Coach ${targetCoach.name}...`, "running");
+
+                for (let i = 0; i < seatsToClick.length; i++) {
+                    const { remaining: curBudget } = await getRemainingBudget();
+                    if (curBudget <= 0) {
+                        onStatus("Click budget reached (16 clicks / 15 min). Stopped to prevent 1-hour account lockout.", "error");
+                        return false;
+                    }
+
+                    const seatBtn = seatsToClick[i];
+                    const seatLabel = (seatBtn.textContent || seatBtn.getAttribute("data-seat") || "").trim();
+
+                    onStatus(`Selecting seat ${seatLabel} (${i + 1}/${seatsToClick.length})...`, "running");
+                    seatBtn.click();
+                    await recordClick(seatLabel, "attempted");
+
+                    // Verify seat selection state
+                    let verified = false;
+                    for (let check = 0; check < 8; check++) {
+                        await sleep(150);
+                        const cl = seatBtn.className || "";
+                        if (
+                            cl.includes("selected") ||
+                            cl.includes("seat-selected") ||
+                            seatBtn.getAttribute("aria-selected") === "true"
+                        ) {
+                            verified = true;
+                            break;
+                        }
+                    }
+
+                    if (!verified) {
+                        const alertMsg = autoDismissSweetAlerts();
+                        if (alertMsg && alertMsg.includes("Multiple order attempt")) {
+                            onStatus(`Shohoz lockout: ${alertMsg.slice(0, 60)}`, "error");
+                            return false;
+                        }
+                        onStatus(`Seat ${seatLabel} click was not registered as selected. Aborted to avoid mis-booking.`, "error");
+                        return false;
                     }
                 }
             }
 
-            if (!bookNowBtn) {
-                bookNowBtn = validBookButtons.find((b) => !b.disabled) || validBookButtons[0];
-            }
+            // 5. Click CONTINUE PURCHASE with precise matching
+            onStatus(`Seats locked (${seatsNeeded}/${seatsNeeded})! Clicking CONTINUE PURCHASE...`, "running");
+            await sleep(300);
 
-            if (!bookNowBtn || bookNowBtn.disabled) {
-                onStatus(`No available Book Now button found for class ${targetClass || "Any"} on this train.`, "error");
+            const alertMsg = autoDismissSweetAlerts();
+            if (alertMsg && alertMsg.includes("Multiple order attempt")) {
+                onStatus(`Shohoz lockout: ${alertMsg.slice(0, 60)}`, "error");
                 return false;
             }
 
-            onStatus(`Clicking BOOK NOW (${bookNowBtn.textContent.trim()})...`, "running");
-            bookNowBtn.click();
-            onStatus("Opened seat map. Loading coaches...", "running");
+            const continueBtn = Array.from(
+                document.querySelectorAll("button, a, input[type='button'], input[type='submit']")
+            ).find((el) => {
+                const txt = (el.textContent || el.value || "").trim().toLowerCase();
+                const isPurchaseText =
+                    txt === "continue purchase" ||
+                    txt === "continue to purchase" ||
+                    txt.includes("continue purchase") ||
+                    txt.includes("continue to purchase") ||
+                    txt === "পরবর্তী ধাপ" ||
+                    txt.includes("পরবর্তী ধাপ");
+                return isPurchaseText && !el.disabled;
+            });
 
-            let waitTries = 0;
-            while (!document.querySelector("#select-bogie") && waitTries < 60) {
-                await sleep(150);
-                waitTries++;
+            if (!continueBtn) {
+                onStatus("Enabled CONTINUE PURCHASE button not found. Please click it manually.", "error");
+                return false;
             }
-        }
 
-        // 2. Select coach with vacant seats (capable of holding seatsNeeded)
-        const bogieSelect = document.querySelector("#select-bogie") || (card && card.querySelector("#select-bogie"));
-        if (!bogieSelect) {
-            onStatus("Coach dropdown (#select-bogie) not found after clicking Book Now.", "error");
-            return false;
-        }
+            continueBtn.click();
+            onStatus("Pushed purchase! Waiting for OTP screen (/trip-info)...", "running");
 
-        const options = Array.from(bogieSelect.options)
-            .filter((o) => {
-                const text = (o.text || "").trim().toLowerCase();
-                return text && !text.includes("select coach") && !text.includes("বগি নির্বাচন");
-            })
-            .map((o) => {
-                const text = o.text.trim();
-                const m =
-                    text.match(/([A-Z0-9_\u0980-\u09FF]+)\s*(?:-|:)\s*(\d+)\s*Seat/i) ||
-                    text.match(/([A-Z0-9_\u0980-\u09FF]+)\s*\((\d+)\)/i);
-                let count = 0;
-                if (m) {
-                    count = parseInt(m[2], 10);
-                } else {
-                    const countOnly = text.match(/(\d+)\s*Seat/i) || text.match(/\((\d+)\)/);
-                    count = countOnly ? parseInt(countOnly[1], 10) : 0;
+            // 6. Wait for OTP screen
+            let otpTries = 0;
+            while (otpTries < 60) {
+                const alertText = autoDismissSweetAlerts();
+                if (alertText && alertText.includes("Multiple order attempt")) {
+                    onStatus(`Shohoz alert: ${alertText.slice(0, 60)}`, "error");
+                    return false;
                 }
-                const name = m ? m[1].toUpperCase() : text.split(/[-:(]/)[0].trim().toUpperCase();
-                return {
-                    name,
-                    count,
-                    value: o.value,
-                };
-            });
 
-        if (options.length === 0) {
-            onStatus("No valid coach options found in dropdown.", "error");
-            return false;
-        }
-
-        // Priority: coaches with count >= seatsNeeded, sorted descending by count
-        const capableCoaches = options.filter((o) => o.count >= seatsNeeded).sort((a, b) => b.count - a.count);
-
-        let targetCoach = null;
-        if (capableCoaches.length > 0) {
-            targetCoach = capableCoaches[0]; // Coach with maximum available seats
-        } else {
-            const availableCoaches = [...options].sort((a, b) => b.count - a.count);
-            if (availableCoaches[0].count > 0) {
-                targetCoach = availableCoaches[0];
-                onStatus(
-                    `Notice: Best coach ${targetCoach.name} has ${targetCoach.count} seat(s) (requested ${seatsNeeded}). Booking maximum available...`,
-                    "running"
-                );
-            }
-        }
-
-        if (!targetCoach || targetCoach.count === 0) {
-            onStatus("All coaches show 0 vacant seats for this train.", "error");
-            return false;
-        }
-
-        if (bogieSelect.value !== targetCoach.value) {
-            onStatus(`Switching to Coach ${targetCoach.name} (${targetCoach.count} seats)...`, "running");
-            bogieSelect.value = targetCoach.value;
-            bogieSelect.dispatchEvent(new Event("change", { bubbles: true }));
-            bogieSelect.dispatchEvent(new Event("input", { bubbles: true }));
-            await sleep(800); // Wait for Angular to re-render coach seat layout
-        }
-
-        // 3. Find available white seats in target coach
-        onStatus(`Scanning vacant seats in Coach ${targetCoach.name} (Need ${seatsNeeded} seats)...`, "running");
-        let availableSeats = [];
-        let scanTries = 0;
-        while (availableSeats.length < seatsNeeded && scanTries < 40) {
-            const allSeatBtns = Array.from(document.querySelectorAll("button.btn-seat, button[data-seat]"));
-
-            let coachScopedBtns = allSeatBtns.filter((b) => {
-                const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
-                return txt.startsWith(targetCoach.name + "-");
-            });
-
-            if (coachScopedBtns.length === 0) {
-                coachScopedBtns = allSeatBtns;
+                if (location.pathname.includes("/trip-info") && document.querySelectorAll("input.rec-otp").length > 0) {
+                    playSuccessChime();
+                    onStatus("🎉 OTP SCREEN REACHED! Enter the 4-digit SMS code.", "success");
+                    const firstOtp = document.querySelector("input.rec-otp");
+                    if (firstOtp) firstOtp.focus();
+                    return true;
+                }
+                await sleep(250);
+                otpTries++;
             }
 
-            availableSeats = coachScopedBtns.filter((b) => {
-                const cl = b.className || "";
-                const txt = (b.textContent || b.getAttribute("data-seat") || "").trim();
-                const isAvailable =
-                    (cl.includes("seat-available") ||
-                        cl.includes("seat-white") ||
-                        !/seat-booked|seat-in-progress|selected|booked|occupied/i.test(cl)) &&
-                    !b.disabled;
-                return isAvailable && txt.length > 0;
-            });
-
-            if (availableSeats.length >= seatsNeeded) break;
-            await sleep(150);
-            scanTries++;
-        }
-
-        if (!availableSeats.length) {
-            onStatus(`No vacant seats available in Coach ${targetCoach.name}.`, "error");
+            onStatus("Timed out waiting for OTP screen (/trip-info). Please check the booking tab.", "error");
             return false;
+        } finally {
+            isAutoCutRunning = false;
         }
+    }
 
-        // 4. Click seats up to seatsNeeded
-        const seatsToClick = availableSeats.slice(0, seatsNeeded);
-        onStatus(`Selecting ${seatsToClick.length} seat(s) in Coach ${targetCoach.name}...`, "running");
-
-        for (let i = 0; i < seatsToClick.length; i++) {
-            const seatBtn = seatsToClick[i];
-            const seatLabel = (seatBtn.textContent || seatBtn.getAttribute("data-seat") || "").trim();
-            if (!/selected/.test(seatBtn.className)) {
-                onStatus(`Selecting seat ${seatLabel} (${i + 1}/${seatsToClick.length})...`, "running");
-                seatBtn.click();
-                await recordClick(seatLabel, "attempted");
-                await sleep(350); // Pause for Angular to register selection
-            }
-        }
-
-        // 5. Click CONTINUE PURCHASE
-        onStatus(`Seats locked (${seatsToClick.length}/${seatsNeeded})! Clicking CONTINUE PURCHASE...`, "running");
-        await sleep(300);
-
-        const alertMsg = autoDismissSweetAlerts();
-        if (alertMsg && alertMsg.includes("Multiple order attempt")) {
-            onStatus(`Shohoz lockout: ${alertMsg.slice(0, 60)}`, "error");
-            return false;
-        }
-
-        const continueBtn = Array.from(
-            document.querySelectorAll("button, a, input[type='button'], input[type='submit']")
-        ).find((el) => {
-            const txt = (el.textContent || el.value || "").trim().toLowerCase();
-            return (
-                txt.includes("continue purchase") ||
-                txt.includes("continue to purchase") ||
-                txt.includes("continue") ||
-                txt.includes("পরবর্তী ধাপ")
-            );
-        });
-
-        if (!continueBtn) {
-            onStatus("CONTINUE PURCHASE button not found. Please click it manually.", "error");
-            return false;
-        }
-
-        continueBtn.click();
-        onStatus("Pushed purchase! Waiting for OTP screen (/trip-info)...", "running");
-
-        // 6. Wait for OTP screen
-        let otpTries = 0;
-        while (otpTries < 60) {
-            const alertText = autoDismissSweetAlerts();
-            if (alertText && alertText.includes("Multiple order attempt")) {
-                onStatus(`Shohoz alert: ${alertText.slice(0, 60)}`, "error");
-                return false;
-            }
-
-            if (location.pathname.includes("/trip-info") && document.querySelectorAll("input.rec-otp").length > 0) {
-                playSuccessChime();
-                onStatus("🎉 OTP SCREEN REACHED! Enter the 4-digit SMS code.", "success");
-                const firstOtp = document.querySelector("input.rec-otp");
-                if (firstOtp) firstOtp.focus();
-                return true;
-            }
-            await sleep(250);
-            otpTries++;
-        }
-
-        onStatus("Pushed purchase. Please check screen for OTP prompt.", "success");
-        return true;
+    function cleanTrainCardTitle(card, fallback = "This Train") {
+        const raw = (
+            card.querySelector(".train-name, .trip-name, h2, h3, h4")?.textContent || fallback
+        ).trim();
+        return raw
+            .replace(/\d+\+?\s*users?\s*are\s*trying\s*to\s*book\s*tickets?\(?s?\)?/gi, "")
+            .replace(/\d+\+?\s*users?.*$/gim, "")
+            .split("\n")[0]
+            .replace(/\s+/g, " ")
+            .trim() || fallback;
     }
 
     // Injects direct Auto-Cut buttons into every train card on the search page
@@ -653,9 +761,7 @@
         cards.forEach((card) => {
             if (card.querySelector(".trainsolo-in-card-btn")) return;
 
-            const trainTitle = (
-                card.querySelector(".train-name, .trip-name, h2, h3, h4")?.textContent || "This Train"
-            ).trim();
+            const trainTitle = cleanTrainCardTitle(card, "This Train");
 
             const btn = document.createElement("button");
             btn.type = "button";
@@ -779,6 +885,8 @@
                 chrome.storage.local.set({
                     trainsolo_booking_target: {
                         ...currentTargetConfig,
+                        train_number: currentTargetConfig.trainNumber,
+                        class: currentTargetConfig.seatClass,
                         timestamp: Date.now(),
                     },
                 });
@@ -804,9 +912,7 @@
             let maxSeats = -1;
 
             cards.forEach((card, idx) => {
-                const title = (
-                    card.querySelector(".train-name, .trip-name, h2, h3, h4")?.textContent || `Train ${idx + 1}`
-                ).trim();
+                const title = cleanTrainCardTitle(card, `Train ${idx + 1}`);
                 const num = (title.match(/\b\d{3,4}\b/) || [])[0] || "";
                 const capacity = getCardSeatCapacity(card, currentTargetConfig.seatClass);
 
@@ -829,9 +935,12 @@
                 }
             });
 
-            // If no explicit match was selected, pre-select best inventory train
-            if (!hudTrainSelect.value && bestCardOption) {
+            // Only pre-select best inventory train if user did NOT specify an explicit train target
+            const hasExplicitTarget = Boolean(currentTargetConfig.train || currentTargetConfig.trainNumber);
+            if (!hasExplicitTarget && !hudTrainSelect.value && bestCardOption) {
                 hudTrainSelect.value = bestCardOption;
+            } else if (hasExplicitTarget && !hudTrainSelect.value) {
+                hudMsg.textContent = `Target train "${currentTargetConfig.train || currentTargetConfig.trainNumber}" not found in current search results.`;
             }
 
             injectInCardButtons();
@@ -845,6 +954,33 @@
                 clearInterval(checkCardsInterval);
             }
         }, 300);
+
+        // Reactivity for Angular SPA in-place navigation
+        let lastObservedHref = location.href;
+        setInterval(() => {
+            if (location.href !== lastObservedHref) {
+                lastObservedHref = location.href;
+                const p = new URLSearchParams(location.search);
+                const f = p.get("fromcity") || "";
+                const t = p.get("tocity") || "";
+                if (hudRoute) {
+                    hudRoute.textContent = f && t ? `${f} ➔ ${t}` : (location.pathname.includes("/search") ? "Search Results" : "Railway Portal");
+                }
+                getEffectiveBookingTarget().then((cfg) => {
+                    currentTargetConfig = cfg;
+                    populateTrainCards();
+                });
+            }
+        }, 800);
+
+        let debounceTimer = null;
+        const domObserver = new MutationObserver(() => {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                populateTrainCards();
+            }, 600);
+        });
+        domObserver.observe(document.body, { childList: true, subtree: true });
 
         // Train Select Change Handler
         hudTrainSelect.addEventListener("change", () => {

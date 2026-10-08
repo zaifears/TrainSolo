@@ -74,25 +74,33 @@ export class SeatRanker {
       if (seatGroup.length <= 1) return true;
       const sorted = sortSeats(seatGroup);
 
-      // Check numeric sequence
-      const nums = sorted.map(s => parseInt(s.label.replace(/\D/g, ''), 10));
-      const allNumbers = nums.every(n => !isNaN(n));
+      // Verify row consistency first
+      if (sorted.some((s) => s.row)) {
+        const firstRow = sorted[0].row;
+        if (!sorted.every((s) => s.row === firstRow)) return false;
+      } else {
+        if (!areSameRow(sorted)) return false;
+      }
+
+      // Check row + column sequence if columns present
+      if (sorted.every((s) => s.column)) {
+        const cols = sorted.map((s) => parseInt(s.column!, 10));
+        if (cols.every((n) => !isNaN(n))) {
+          for (let i = 0; i < cols.length - 1; i++) {
+            if (cols[i + 1] - cols[i] !== 1) return false;
+          }
+          return true;
+        }
+      }
+
+      // Check numeric sequence within the confirmed same row
+      const nums = sorted.map((s) => parseInt(s.label.replace(/\D/g, ''), 10));
+      const allNumbers = nums.every((n) => !isNaN(n));
       if (allNumbers) {
         for (let i = 0; i < nums.length - 1; i++) {
           if (nums[i + 1] - nums[i] !== 1) {
             return false;
           }
-        }
-        return true;
-      }
-
-      // Check row + column sequence
-      if (sorted.every(s => s.row && s.column)) {
-        const firstRow = sorted[0].row;
-        if (!sorted.every(s => s.row === firstRow)) return false;
-        const cols = sorted.map(s => parseInt(s.column!, 10));
-        for (let i = 0; i < cols.length - 1; i++) {
-          if (cols[i + 1] - cols[i] !== 1) return false;
         }
         return true;
       }
@@ -103,14 +111,14 @@ export class SeatRanker {
     // Helper: Check if seats share the same row
     const areSameRow = (seatGroup: Seat[]): boolean => {
       if (seatGroup.length <= 1) return true;
-      if (seatGroup.every(s => s.row)) {
-        return seatGroup.every(s => s.row === seatGroup[0].row);
+      if (seatGroup.every((s) => s.row)) {
+        return seatGroup.every((s) => s.row === seatGroup[0].row);
       }
       // Heuristic for 4-across numbering (e.g. 1-4 is row 1, 5-8 is row 2)
-      const nums = seatGroup.map(s => parseInt(s.label.replace(/\D/g, ''), 10));
-      if (nums.every(n => !isNaN(n))) {
+      const nums = seatGroup.map((s) => parseInt(s.label.replace(/\D/g, ''), 10));
+      if (nums.every((n) => !isNaN(n))) {
         const rowId = Math.floor((nums[0] - 1) / 4);
-        return nums.every(n => Math.floor((n - 1) / 4) === rowId);
+        return nums.every((n) => Math.floor((n - 1) / 4) === rowId);
       }
       return false;
     };
@@ -118,19 +126,27 @@ export class SeatRanker {
     // Window preference weighting
     const scoreWindow = (group: Seat[]): number => {
       if (!preferWindow) return 0;
-      return group.filter(s => s.type === 'WINDOW').length * 10;
+      return group.filter((s) => s.type === 'WINDOW').length * 10;
     };
 
-    // Find sliding window or combination of contiguous/adjacent seats in a coach
+    // Find sliding window of contiguous/adjacent seats in a coach, maximizing window preference
     const findAdjacentGroup = (coachSeats: Seat[]): Seat[] | null => {
       const sorted = sortSeats(coachSeats);
+      let bestGroup: Seat[] | null = null;
+      let bestScore = -1;
+
       for (let i = 0; i <= sorted.length - seatCount; i++) {
         const windowSlice = sorted.slice(i, i + seatCount);
         if (areAdjacent(windowSlice)) {
-          return windowSlice;
+          const score = scoreWindow(windowSlice);
+          if (score > bestScore) {
+            bestScore = score;
+            bestGroup = windowSlice;
+            if (!preferWindow) break;
+          }
         }
       }
-      return null;
+      return bestGroup;
     };
 
     // 2. Adjacent in preferred coaches
