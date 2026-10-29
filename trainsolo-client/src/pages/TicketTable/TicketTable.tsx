@@ -25,6 +25,23 @@ import axiosInstance from '@/helpers/axiosInstance';
 import addNotification from 'react-push-notification';
 
 const SCAN_INTERVAL_SECONDS = 15;
+// Bot-safe burst floor: 2.8s + 0-350ms jitter (~19 req/min max, well under Shohoz WAF & server 40 req/min limit)
+const MIN_BURST_INTERVAL_MS = 2800;
+
+const SHOHOZ_MONTHS = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+function formatShohozDateClient(dateStr: string): string {
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+        const [year, monthNum, day] = parts;
+        const month = SHOHOZ_MONTHS[parseInt(monthNum, 10) - 1];
+        if (month) return `${day.padStart(2, '0')}-${month}-${year}`;
+    }
+    return dateStr;
+}
 
 const TicketTable = () => {
     const { scans } = useTicketContext();
@@ -42,6 +59,17 @@ const TicketTable = () => {
             Notification.permission === 'granted',
     );
 
+    // Hands-Free Zero-Click Auto-Cut & Warm Tab state
+    const [autoDispatchArmed, setAutoDispatchArmed] = useState<boolean>(() => {
+        try {
+            return sessionStorage.getItem('trainsolo_handsfree_armed') !== '0';
+        } catch {
+            return true;
+        }
+    });
+    const [isTabPrewarmed, setIsTabPrewarmed] = useState(false);
+    const [manualBurstRemainingSec, setManualBurstRemainingSec] = useState(0);
+
     const notificationAudio = useRef(new Audio(audio));
     const navigate = useNavigate();
     const ticketsObjRef = useRef(ticketsObj);
@@ -50,10 +78,17 @@ const TicketTable = () => {
     const inFlightRef = useRef(false);
     const abortControllerRef = useRef<AbortController | null>(null);
     const scanRequestIdRef = useRef(0);
+    const lastFetchStartedAtRef = useRef<number>(0);
+    const nextBurstAllowedAtRef = useRef<number>(0);
+    const manualBurstUntilRef = useRef<number>(0);
+    const autoDispatchArmedRef = useRef(autoDispatchArmed);
+    autoDispatchArmedRef.current = autoDispatchArmed;
+    const hasAutoDispatchedRef = useRef<string | null>(null);
 
-    // Live Bangladesh Standard Time clock and 7:59:58 AM precision trigger
+    // Live Bangladesh Standard Time clock and precision drop triggers (8:00 AM West & 2:00 PM East)
     const [bstClock, setBstClock] = useState('');
-    const [secondsTo8Am, setSecondsTo8Am] = useState<number | null>(null);
+    const [secondsToDrop, setSecondsToDrop] = useState<number | null>(null);
+    const [activeDropLabel, setActiveDropLabel] = useState<string>('08:00 AM');
     const [isBurstActive, setIsBurstActive] = useState(false);
     const inBurstRef = useRef(false);
 
@@ -70,6 +105,11 @@ const TicketTable = () => {
         if (inFlightRef.current || isAuthExpired) return;
 
         inFlightRef.current = true;
+        const nowMs = Date.now();
+        lastFetchStartedAtRef.current = nowMs;
+        // Enforce bot-safe spacing with random 0-350ms jitter during burst mode
+        nextBurstAllowedAtRef.current =
+            nowMs + MIN_BURST_INTERVAL_MS + Math.floor(Math.random() * 350);
         setIsFetching(true);
         setLastErrorMsg(null);
 
@@ -150,6 +190,82 @@ const TicketTable = () => {
                             newTicketToast(bestFound);
                         }
 
+                        // Zero-Click Hands-Free Auto-Dispatch when sufficient seats are found
+                        const sufficientCandidates = newTickets
+                            .filter((t) => t.seats >= (t.requiredSeats || partySize))
+                            .sort((a, b) => b.seats - a.seats);
+                        const bestSufficient = sufficientCandidates[0] || null;
+
+                        if (bestSufficient) {
+                            // Stop burst polling immediately so we don't waste Shohoz API quota while booking
+                            manualBurstUntilRef.current = 0;
+                            setManualBurstRemainingSec(0);
+                            inBurstRef.current = false;
+                            setIsBurstActive(false);
+
+                            const dispatchKey = `${bestSufficient.trainName}-${bestSufficient.class}-${bestSufficient.journeyDate}`;
+                            if (
+                                autoDispatchArmedRef.current &&
+                                hasAutoDispatchedRef.current !== dispatchKey
+                            ) {
+                                hasAutoDispatchedRef.current = dispatchKey;
+                                const targetPayload = {
+                                    train: bestSufficient.trainName,
+                                    train_number:
+                                        bestSufficient.trainNumber ||
+                                        (bestSufficient.trainName.match(/\b\d{3,4}\b/) || [])[0] ||
+                                        '',
+                                    trainNumber:
+                                        bestSufficient.trainNumber ||
+                                        (bestSufficient.trainName.match(/\b\d{3,4}\b/) || [])[0] ||
+                                        '',
+                                    seats: bestSufficient.requiredSeats || partySize,
+                                    class: bestSufficient.class,
+                                    seatClass: bestSufficient.class,
+                                    from: bestSufficient.from,
+                                    to: bestSufficient.to,
+                                    date: bestSufficient.journeyDate || formatDate,
+                                    autocut: true,
+                                    autoCut: true,
+                                    timestamp: Date.now(),
+                                };
+                                const dispatchUrl = `${bestSufficient.link}#autocut=1`;
+                                try {
+                                    localStorage.setItem(
+                                        'trainsolo_booking_target',
+                                        JSON.stringify(targetPayload),
+                                    );
+                                    window.dispatchEvent(
+                                        new CustomEvent('trainsolo:sync-target', {
+                                            detail: targetPayload,
+                                        }),
+                                    );
+                                    const hasExtensionBridge =
+                                        document.documentElement.getAttribute(
+                                            'data-trainsolo-extension',
+                                        ) === 'active';
+                                    if (hasExtensionBridge) {
+                                        window.dispatchEvent(
+                                            new CustomEvent('trainsolo:auto-dispatch', {
+                                                detail: {
+                                                    url: dispatchUrl,
+                                                    target: targetPayload,
+                                                },
+                                            }),
+                                        );
+                                    } else {
+                                        window.open(dispatchUrl, '_blank', 'noopener,noreferrer');
+                                    }
+                                    toast.success(
+                                        `⚡ Hands-Free Auto-Cut launched for ${bestSufficient.trainName} (${bestSufficient.seats} seats)!`,
+                                        { duration: 6000 },
+                                    );
+                                } catch {
+                        // Ignore storage/dispatch errors
+                    }
+                            }
+                        }
+
                         // Immutable state update: generate fresh ticket objects
                         const updatedList: ITicket[] = newTickets.map((t) => ({ ...t }));
 
@@ -186,6 +302,13 @@ const TicketTable = () => {
                             setTicketsObj({});
                             setLastErrorMsg('Bangladesh Railway session expired. Please re-authenticate.');
                             return;
+                        }
+                        if (statusCode === 429) {
+                            // Immediately exit burst mode and back off if rate-limited
+                            manualBurstUntilRef.current = 0;
+                            setManualBurstRemainingSec(0);
+                            inBurstRef.current = false;
+                            setIsBurstActive(false);
                         }
 
                         // Mark existing tickets in this scan partition as stale
@@ -226,7 +349,20 @@ const TicketTable = () => {
         fetchAllTickets();
     }, [fetchAllTickets]);
 
-    // Live clock ticker & 7:59:58 AM precision trigger
+    // Listen for pre-warm confirmation from TrainSolo Extension
+    useEffect(() => {
+        const onPrewarmStatus = (e: Event) => {
+            const detail = (e as CustomEvent)?.detail;
+            if (detail?.ok) {
+                setIsTabPrewarmed(true);
+                toast.success('🔥 Railway booking tab is pre-warmed and ready for instant Auto-Cut!');
+            }
+        };
+        window.addEventListener('trainsolo:prewarm-status', onPrewarmStatus);
+        return () => window.removeEventListener('trainsolo:prewarm-status', onPrewarmStatus);
+    }, []);
+
+    // Live clock ticker & 8:00 AM (West) + 2:00 PM (East) + Manual 30s Bot-Safe Burst trigger
     useEffect(() => {
         if (isAuthExpired) return;
 
@@ -238,35 +374,52 @@ const TicketTable = () => {
             const minutes = now.minutes();
             const seconds = now.seconds();
 
-            // Calculate seconds to 8:00:00 AM (if between 7:50 and 8:00)
+            // Calculate countdown to 8:00 AM (West Zone) or 2:00 PM / 14:00 (East Zone)
             if (hours === 7 && minutes >= 50) {
                 const diff = (60 - minutes - 1) * 60 + (60 - seconds);
-                setSecondsTo8Am(diff);
-            } else if (hours === 8 && minutes === 0 && seconds <= 15) {
-                setSecondsTo8Am(0);
+                setSecondsToDrop(diff);
+                setActiveDropLabel('08:00 AM');
+            } else if (hours === 8 && minutes === 0 && seconds <= 45) {
+                setSecondsToDrop(0);
+                setActiveDropLabel('08:00 AM');
+            } else if (hours === 13 && minutes >= 50) {
+                const diff = (60 - minutes - 1) * 60 + (60 - seconds);
+                setSecondsToDrop(diff);
+                setActiveDropLabel('02:00 PM');
+            } else if (hours === 14 && minutes === 0 && seconds <= 45) {
+                setSecondsToDrop(0);
+                setActiveDropLabel('02:00 PM');
             } else {
-                setSecondsTo8Am(null);
+                setSecondsToDrop(null);
+                setActiveDropLabel(hours >= 8 && hours < 14 ? '01:59:56 PM' : '07:59:56 AM');
             }
 
-            // High-Speed Precision Burst at 07:59:58 to 08:00:10 AM
-            const isBurstWindow =
-                (hours === 7 && minutes === 59 && seconds >= 58) ||
-                (hours === 8 && minutes === 0 && seconds <= 10);
+            // Update manual 30s burst countdown if active
+            const nowMs = Date.now();
+            const manualLeftMs = Math.max(0, manualBurstUntilRef.current - nowMs);
+            setManualBurstRemainingSec(Math.ceil(manualLeftMs / 1000));
+
+            // Scheduled Drop Windows (07:59:56-08:00:45 AM & 01:59:56-02:00:45 PM) or Manual 30s Burst
+            const isScheduledBurst =
+                ((hours === 7 || hours === 13) && minutes === 59 && seconds >= 56) ||
+                ((hours === 8 || hours === 14) && minutes === 0 && seconds <= 45);
+            const isBurstWindow = isScheduledBurst || manualLeftMs > 0;
 
             if (isBurstWindow) {
                 setIsBurstActive(true);
                 inBurstRef.current = true;
-                if (!isFetching) {
+                // Enforce bot-safe minimum spacing (~2.8s - 3.15s) between burst requests
+                if (!inFlightRef.current && nowMs >= nextBurstAllowedAtRef.current) {
                     fetchAllTickets();
                 }
             } else {
                 setIsBurstActive(false);
                 inBurstRef.current = false;
             }
-        }, 500);
+        }, 400);
 
         return () => clearInterval(timer);
-    }, [fetchAllTickets, isFetching, isAuthExpired]);
+    }, [fetchAllTickets, isAuthExpired]);
 
     // Automatic countdown interval
     useEffect(() => {
@@ -304,6 +457,98 @@ const TicketTable = () => {
         if (isAuthExpired) return;
         setCountdown(SCAN_INTERVAL_SECONDS);
         fetchAllTickets();
+    };
+
+    const handleToggleHandsFree = () => {
+        setAutoDispatchArmed((prev) => {
+            const next = !prev;
+            try {
+                sessionStorage.setItem('trainsolo_handsfree_armed', next ? '1' : '0');
+            } catch {
+                        // Ignore storage/dispatch errors
+                    }
+            if (next) {
+                hasAutoDispatchedRef.current = null;
+                toast.success('🤖 Hands-Free Auto-Cut ARMED! Will launch automatically the instant seats appear.');
+            } else {
+                toast('Hands-Free Auto-Cut paused (manual click mode).');
+            }
+            return next;
+        });
+    };
+
+    const handleTriggerManualBurst = () => {
+        if (isAuthExpired) return;
+        if (manualBurstRemainingSec > 0) {
+            manualBurstUntilRef.current = 0;
+            setManualBurstRemainingSec(0);
+            inBurstRef.current = false;
+            setIsBurstActive(false);
+            toast('30s Drop Burst stopped.');
+            return;
+        }
+        manualBurstUntilRef.current = Date.now() + 30 * 1000;
+        setManualBurstRemainingSec(30);
+        setIsBurstActive(true);
+        inBurstRef.current = true;
+        toast.success('🎯 30s Special Train Burst active! Scanning at bot-safe ~2.8s intervals.');
+        if (!inFlightRef.current) {
+            fetchAllTickets();
+        }
+    };
+
+    const handlePrewarmRailwayTab = () => {
+        const primaryScan = scans[0];
+        if (!primaryScan?.from || !primaryScan?.to || !primaryScan?.date) return;
+        const isoDate = formatDateToStr(primaryScan.date);
+        const shohozDate = formatShohozDateClient(isoDate);
+        const seatClass =
+            primaryScan.seatClass && primaryScan.seatClass !== 'ANY'
+                ? primaryScan.seatClass
+                : 'S_CHAIR';
+        const partySize = primaryScan.seatCount || 1;
+        const trainParam = primaryScan.preferredTrain || '';
+        const prewarmUrl = `https://eticket.railway.gov.bd/booking/train/search?fromcity=${encodeURIComponent(
+            primaryScan.from.trim(),
+        )}&tocity=${encodeURIComponent(
+            primaryScan.to.trim(),
+        )}&doj=${encodeURIComponent(shohozDate)}&class=${encodeURIComponent(
+            seatClass,
+        )}&train=${encodeURIComponent(trainParam)}&seats=${partySize}`;
+
+        const targetPayload = {
+            train: trainParam,
+            train_number: (trainParam.match(/\b\d{3,4}\b/) || [])[0] || '',
+            trainNumber: (trainParam.match(/\b\d{3,4}\b/) || [])[0] || '',
+            seats: partySize,
+            class: seatClass,
+            seatClass,
+            from: primaryScan.from,
+            to: primaryScan.to,
+            date: isoDate,
+            autocut: false,
+            autoCut: false,
+            timestamp: Date.now(),
+        };
+
+        try {
+            localStorage.setItem('trainsolo_booking_target', JSON.stringify(targetPayload));
+            const hasExtensionBridge =
+                document.documentElement.getAttribute('data-trainsolo-extension') === 'active';
+            if (hasExtensionBridge) {
+                window.dispatchEvent(
+                    new CustomEvent('trainsolo:prewarm-tab', {
+                        detail: { url: prewarmUrl, target: targetPayload },
+                    }),
+                );
+            } else {
+                window.open(prewarmUrl, '_blank', 'noopener,noreferrer');
+                setIsTabPrewarmed(true);
+                toast.success('🔥 Opened Railway search tab! Keep it open for instant Drop Sniper.');
+            }
+        } catch {
+                        // Ignore storage/dispatch errors
+                    }
     };
 
     const handleStop = () => {
@@ -439,7 +684,9 @@ const TicketTable = () => {
         try {
             localStorage.setItem('trainsolo_booking_target', JSON.stringify(payload));
             window.dispatchEvent(new CustomEvent('trainsolo:sync-target', { detail: payload }));
-        } catch (_) {}
+        } catch {
+                        // Ignore storage/dispatch errors
+                    }
     };
 
     return (
@@ -458,23 +705,25 @@ const TicketTable = () => {
                     </div>
                 </div>
 
-                {secondsTo8Am !== null ? (
+                {secondsToDrop !== null ? (
                     <div className="flex items-center gap-2.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 px-4 py-2 rounded-xl font-bold text-sm shadow-inner">
-                        <span>🎯 8:00 AM Ticket Drop in:</span>
+                        <span>🎯 {activeDropLabel} Ticket Drop in:</span>
                         <span className="font-mono text-base text-amber-200 font-black">
-                            {secondsTo8Am === 0 ? 'DROP IS LIVE!' : `${secondsTo8Am}s`}
+                            {secondsToDrop === 0 ? 'DROP IS LIVE!' : `${secondsToDrop}s`}
                         </span>
                     </div>
                 ) : (
                     <div className="text-xs text-slate-300 bg-slate-800 px-3.5 py-1.5 rounded-xl border border-slate-700">
-                        ⏰ Smart Drop Burst armed for <strong className="text-emerald-400">07:59:58 AM</strong>
+                        ⏰ Smart Drop Burst armed for <strong className="text-emerald-400">{activeDropLabel}</strong> (8 AM & 2 PM)
                     </div>
                 )}
 
                 {isBurstActive && (
                     <div className="bg-red-600 text-white px-4 py-1.5 rounded-xl text-xs font-black animate-bounce shadow-xl flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                        8:00 AM HIGH-SPEED BURST SCANNING ACTIVE
+                        {manualBurstRemainingSec > 0
+                            ? `SPECIAL TRAIN BURST ACTIVE (${manualBurstRemainingSec}s)`
+                            : 'BOT-SAFE HIGH-SPEED BURST ACTIVE (~2.8s)'}
                     </div>
                 )}
             </div>
@@ -608,6 +857,49 @@ const TicketTable = () => {
 
             {/* Action Buttons Toolbar */}
             <div className="flex flex-wrap gap-2.5 justify-center">
+                <Button
+                    size="sm"
+                    className={`cursor-pointer font-bold shadow-sm ${
+                        autoDispatchArmed
+                            ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 border border-amber-300'
+                            : 'bg-slate-700 hover:bg-slate-800 text-white'
+                    }`}
+                    onClick={handleToggleHandsFree}
+                    disabled={isAuthExpired}
+                >
+                    {autoDispatchArmed
+                        ? '🤖 Hands-Free Auto-Cut: ARMED'
+                        : '🤖 Hands-Free Auto-Cut: OFF'}
+                </Button>
+
+                <Button
+                    size="sm"
+                    className={`cursor-pointer font-semibold shadow-sm ${
+                        isTabPrewarmed
+                            ? 'bg-teal-700 hover:bg-teal-800 text-white'
+                            : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                    }`}
+                    onClick={handlePrewarmRailwayTab}
+                    disabled={isAuthExpired}
+                >
+                    {isTabPrewarmed ? '🔥 Railway Tab Warm' : '🔥 Pre-Warm Railway Tab'}
+                </Button>
+
+                <Button
+                    size="sm"
+                    className={`cursor-pointer font-semibold shadow-sm ${
+                        manualBurstRemainingSec > 0
+                            ? 'bg-orange-600 hover:bg-orange-700 text-white animate-pulse'
+                            : 'bg-rose-600 hover:bg-rose-700 text-white'
+                    }`}
+                    onClick={handleTriggerManualBurst}
+                    disabled={isAuthExpired}
+                >
+                    {manualBurstRemainingSec > 0
+                        ? `🛑 Stop Burst (${manualBurstRemainingSec}s)`
+                        : '🎯 30s Special Train Burst'}
+                </Button>
+
                 <Button
                     size="sm"
                     className="bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer font-semibold shadow-sm"
@@ -792,11 +1084,24 @@ const TicketTable = () => {
                             <strong>{SCAN_INTERVAL_SECONDS}s</strong>.
                         </p>
                         <p className="text-xs text-emerald-700 font-semibold mt-1">
-                            The moment tickets unlock at 7:58 - 8:00 AM, the audio chime will ring and tickets will appear here instantly!
+                            The moment tickets unlock at 8:00 AM / 2:00 PM (or special train release),{' '}
+                            {autoDispatchArmed
+                                ? 'TrainSolo will automatically launch Auto-Cut in your warm Railway tab with 0-second delay!'
+                                : 'the audio chime will ring and tickets will appear here instantly!'}
                         </p>
                     </div>
 
-                    <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+                    <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+                        <Button
+                            onClick={handlePrewarmRailwayTab}
+                            size="sm"
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 cursor-pointer"
+                            disabled={isAuthExpired}
+                        >
+                            {isTabPrewarmed
+                                ? '🔥 Railway Tab Pre-Warmed'
+                                : '🔥 Pre-Warm Railway Tab (Recommended)'}
+                        </Button>
                         <Button
                             onClick={handleManualScan}
                             size="sm"

@@ -284,26 +284,34 @@
             return true;
         };
 
-        // 2. Check early sessionStorage
-        if (!train || !seats) {
-            try {
-                const rawSession = sessionStorage.getItem("trainsolo_booking_target");
-                if (rawSession) {
-                    const s = JSON.parse(rawSession);
-                    const isFresh = Date.now() - (s.timestamp || 0) < 10 * 60 * 1000;
-                    if (isFresh && matchesCurrentJourney(s)) {
+        // 2. Check early sessionStorage (HUD overrides take precedence over stale URL params across reloads)
+        try {
+            const rawSession = sessionStorage.getItem("trainsolo_booking_target");
+            if (rawSession) {
+                const s = JSON.parse(rawSession);
+                const isFresh = Date.now() - (s.timestamp || 0) < 15 * 60 * 1000;
+                if (isFresh && matchesCurrentJourney(s)) {
+                    if (s.hudOverride) {
+                        if (typeof s.train === "string") train = s.train;
+                        if (typeof (s.train_number ?? s.trainNumber) === "string") {
+                            trainNumber = s.train_number ?? s.trainNumber;
+                        }
+                        if (s.seats) seats = s.seats;
+                        if (typeof (s.class ?? s.seatClass) === "string") {
+                            seatClass = s.class ?? s.seatClass;
+                        }
+                    } else {
                         if (!train && s.train) train = s.train;
                         if (!trainNumber && (s.train_number || s.trainNumber)) trainNumber = s.train_number || s.trainNumber;
                         if (!seats && s.seats) seats = s.seats;
                         if (!seatClass && (s.class || s.seatClass)) seatClass = s.class || s.seatClass;
-                        // Auto-cut only inherits if journey strictly matches and was requested within 5 minutes
-                        if (!autoCut && (s.autocut || s.autoCut) && (Date.now() - (s.timestamp || 0) < 5 * 60 * 1000)) {
-                            autoCut = true;
-                        }
+                    }
+                    if (!autoCut && (s.autocut || s.autoCut) && (Date.now() - (s.timestamp || 0) < 5 * 60 * 1000)) {
+                        autoCut = true;
                     }
                 }
-            } catch (_) {}
-        }
+            }
+        } catch (_) {}
 
         // 3. Check chrome.storage.local (synced from TrainSolo app via tracker-bridge)
         if (!train || !seats) {
@@ -334,28 +342,76 @@
         };
     }
 
-    // Computes total available seats visible on a card for a given class
-    function getCardSeatCapacity(card, targetClass) {
-        if (targetClass && targetClass !== "ANY") {
-            const rows = Array.from(
-                card.querySelectorAll("tr, .trip-seat-class, .seat-class-row, .single-seat-class, li, div[class*='class']")
-            );
-            for (const r of rows) {
-                const rowText = r.textContent || "";
-                if (matchesSeatClass(rowText, targetClass)) {
-                    const countMatch = rowText.match(/(\d+)\s*(?:Seat|Available|আসন)/i) || rowText.match(/\((\d+)\)/);
-                    if (countMatch) return parseInt(countMatch[1], 10);
-                }
+    // Extracts exact available seat count from a single seat-class tile or row on eticket.railway.gov.bd
+    function extractSeatCountFromTile(tile) {
+        if (!tile) return 0;
+        const dedicatedCountEl = tile.querySelector?.(".all-seats, .seat-available, .available-seats, .seat-count");
+        if (dedicatedCountEl) {
+            const rawDigits = (dedicatedCountEl.textContent || "").trim();
+            if (/^\d+$/.test(rawDigits)) {
+                return parseInt(rawDigits, 10);
             }
         }
-        // General count on card
-        const allMatches = Array.from((card.textContent || "").matchAll(/(\d+)\s*(?:Seat|Available|আসন)/gi));
-        let max = 0;
-        for (const m of allMatches) {
-            const val = parseInt(m[1], 10);
-            if (val > max) max = val;
+
+        const text = (tile.textContent || "").replace(/\s+/g, " ");
+        // 1. Official Shohoz format: "Available Tickets (Counter + Online) 45" or "Available Tickets 45"
+        const afterAvailable = text.match(
+            /(?:Available\s*Tickets?(?:\s*\([^)]*\))?|Available\s*Seats?|উপলব্ধ\s*আসন|আসন\s*সংখ্যা)[\s:=-]*(\d+)/i
+        );
+        if (afterAvailable) {
+            return parseInt(afterAvailable[1], 10);
         }
-        return max;
+
+        // 2. Number before "Seat(s)" / "Available" / "আসন" (excluding "1+ users are trying to book ticket(s)")
+        const beforeLabel = text.match(/(\d+)\s*(?:Seats?|Available|আসন)(?!\s*\))/i);
+        if (beforeLabel) {
+            return parseInt(beforeLabel[1], 10);
+        }
+
+        return 0;
+    }
+
+    // Computes total available seats visible on a card for a given class
+    function getCardSeatCapacity(card, targetClass) {
+        if (!card) return 0;
+        const classTiles = Array.from(
+            card.querySelectorAll(".single-seat-class, .trip-seat-class, .seat-class-row")
+        );
+
+        if (classTiles.length > 0) {
+            if (targetClass && targetClass !== "ANY" && targetClass !== "ALL") {
+                for (const tile of classTiles) {
+                    const classHeader =
+                        tile.querySelector?.(".seat-class-name, .seat-class, .type-name")?.textContent ||
+                        tile.textContent ||
+                        "";
+                    if (matchesSeatClass(classHeader, targetClass)) {
+                        return extractSeatCountFromTile(tile);
+                    }
+                }
+                return 0;
+            }
+
+            let maxTileSeats = 0;
+            for (const tile of classTiles) {
+                const count = extractSeatCountFromTile(tile);
+                if (count > maxTileSeats) maxTileSeats = count;
+            }
+            return maxTileSeats;
+        }
+
+        // Fallback for non-tile layout rows
+        if (targetClass && targetClass !== "ANY" && targetClass !== "ALL") {
+            const rows = Array.from(card.querySelectorAll("tr, li, div[class*='class']"));
+            for (const r of rows) {
+                if (matchesSeatClass(r.textContent || "", targetClass)) {
+                    return extractSeatCountFromTile(r);
+                }
+            }
+            return 0;
+        }
+
+        return extractSeatCountFromTile(card);
     }
 
     // Intelligent Target Train Card Locator
@@ -457,6 +513,98 @@
     };
 
     let isAutoCutRunning = false;
+    let isSniperArmed = sessionStorage.getItem("trainsolo_sniper_armed") === "1";
+    let sniperTimer = null;
+
+    // Anti-collision seat selector: picks contiguous same-row seats starting from the 60% offset
+    // of available seats so we dodge the stampede clicking index 0 (seat 1 & 2).
+    function selectOptimalAvailableSeats(availableSeats, neededClicks) {
+        if (availableSeats.length <= neededClicks) {
+            return availableSeats.slice(0, neededClicks);
+        }
+
+        const getSeatNum = (btn) => {
+            const txt = (btn.textContent || btn.getAttribute("data-seat") || "").trim();
+            const m = txt.match(/(\d+)$/);
+            return m ? parseInt(m[1], 10) : 0;
+        };
+
+        const sorted = [...availableSeats].sort((a, b) => getSeatNum(a) - getSeatNum(b));
+        const maxStart = sorted.length - neededClicks;
+        const startOffset = Math.min(maxStart, Math.max(0, Math.floor(sorted.length * 0.6)));
+
+        // Build search order starting from 60% offset, then wrapping around
+        const candidateIndices = [];
+        for (let i = startOffset; i <= maxStart; i++) candidateIndices.push(i);
+        for (let i = startOffset - 1; i >= 0; i--) candidateIndices.push(i);
+
+        // Pass 1: Contiguous seats in the same 4-seat row
+        if (neededClicks > 1) {
+            for (const idx of candidateIndices) {
+                const slice = sorted.slice(idx, idx + neededClicks);
+                const firstNum = getSeatNum(slice[0]);
+                const lastNum = getSeatNum(slice[slice.length - 1]);
+                if (
+                    firstNum > 0 &&
+                    lastNum - firstNum === neededClicks - 1 &&
+                    Math.floor((firstNum - 1) / 4) === Math.floor((lastNum - 1) / 4)
+                ) {
+                    return slice;
+                }
+            }
+
+            // Pass 2: Any consecutive seat numbers starting from offset
+            for (const idx of candidateIndices) {
+                const slice = sorted.slice(idx, idx + neededClicks);
+                const firstNum = getSeatNum(slice[0]);
+                const lastNum = getSeatNum(slice[slice.length - 1]);
+                if (firstNum > 0 && lastNum - firstNum === neededClicks - 1) {
+                    return slice;
+                }
+            }
+        }
+
+        return sorted.slice(startOffset, startOffset + neededClicks);
+    }
+
+    // Triggers an in-page search refresh on eticket.railway.gov.bd without cold-booting a new tab
+    async function triggerInPageSearchRefresh() {
+        const buttons = Array.from(document.querySelectorAll("button, a.btn, input[type='submit'], input[type='button']"));
+        const directSearchBtn = buttons.find((b) => {
+            const txt = (b.textContent || b.value || "").trim().toUpperCase();
+            return (
+                (txt === "SEARCH" || txt === "SEARCH TRAINS" || txt === "খুঁজুন") &&
+                !b.disabled &&
+                b.offsetParent !== null
+            );
+        });
+        if (directSearchBtn) {
+            directSearchBtn.click();
+            return "in_page_search";
+        }
+
+        const modifyBtn = buttons.find((b) => {
+            const txt = (b.textContent || b.value || "").trim().toUpperCase();
+            return (txt.includes("MODIFY SEARCH") || txt.includes("পরিবর্তন")) && !b.disabled;
+        });
+        if (modifyBtn) {
+            modifyBtn.click();
+            await sleep(120);
+            const submitAfterModify = Array.from(
+                document.querySelectorAll("button, a.btn, input[type='submit'], input[type='button']")
+            ).find((b) => {
+                const txt = (b.textContent || b.value || "").trim().toUpperCase();
+                return (txt === "SEARCH" || txt === "SEARCH TRAINS" || txt === "খুঁজুন") && !b.disabled;
+            });
+            if (submitAfterModify) {
+                submitAfterModify.click();
+                return "modify_then_search";
+            }
+        }
+
+        location.reload();
+        return "reloaded";
+    }
 
     // Auto-Cut Execution Logic
     async function runAutoCut(onStatus, forcedCard = null) {
@@ -480,19 +628,19 @@
 
             autoDismissSweetAlerts();
 
-            // 1. Wait for train search results to load
+            // 1. Wait for train search results to load (fast 50ms reactive poll)
             onStatus("Waiting for train search results to load...", "running");
             let cards = [];
             let cardWaitTries = 0;
-            while (cards.length === 0 && cardWaitTries < 60) {
+            while (cards.length === 0 && cardWaitTries < 200) {
                 cards = Array.from(document.querySelectorAll(".single-trip-wrapper, .trip-wrapper"));
                 if (cards.length > 0) break;
-                await sleep(250);
+                await sleep(50);
                 cardWaitTries++;
             }
 
             if (!cards.length) {
-                onStatus("No train cards rendered on page. Please verify your search route.", "error");
+                onStatus("No train cards rendered on page. Arm Drop Sniper or verify route.", "error");
                 return false;
             }
 
@@ -560,11 +708,10 @@
             // Focus & highlight target train card
             if (card) {
                 try {
-                    card.scrollIntoView({ behavior: "smooth", block: "center" });
+                    card.scrollIntoView({ behavior: "instant", block: "center" });
                     card.style.outline = "4px solid #16a34a";
                     card.style.boxShadow = "0 0 25px rgba(22, 163, 74, 0.5)";
                     card.style.borderRadius = "12px";
-                    card.style.transition = "all 0.3s ease";
                 } catch (_) {}
             }
 
@@ -581,7 +728,7 @@
                         "tr, .trip-seat-class, .seat-class-row, .single-seat-class, li, div[class*='class']"
                     );
                     const activeClassElement = card.querySelector(
-                        ".trip-seat-class.active, .seat-class-row.active, .single-seat-class.active, [class*='seat-class'].active, .active-class"
+                        ".trip-seat-class.active, .seat-class-row.active, .single-seat-class.active, [class*='seat-class'].active, .active-class, .single-seat-class.selected"
                     );
                     if (
                         (parentClassContainer && matchesSeatClass(parentClassContainer.textContent || "", targetClass)) ||
@@ -622,7 +769,7 @@
                 });
 
                 let bookNowBtn = null;
-                if (targetClass && targetClass !== "ANY" && validBookButtons.length > 0) {
+                if (targetClass && targetClass !== "ANY" && targetClass !== "ALL" && validBookButtons.length > 0) {
                     for (const btn of validBookButtons) {
                         const row = btn.closest("tr, .trip-seat-class, .seat-class-row, .single-seat-class, li, div[class*='class']");
                         const rowText = row ? row.textContent || "" : "";
@@ -631,8 +778,19 @@
                             break;
                         }
                     }
-                } else if (!targetClass || targetClass === "ANY") {
-                    bookNowBtn = validBookButtons.find((b) => !b.disabled) || validBookButtons[0];
+                } else if (!targetClass || targetClass === "ANY" || targetClass === "ALL") {
+                    // Pick the enabled BOOK NOW button whose class tile has the most available seats
+                    const enabledBtns = validBookButtons.filter((b) => !b.disabled);
+                    if (enabledBtns.length > 0) {
+                        enabledBtns.sort((a, b) => {
+                            const tileA = a.closest(".single-seat-class, .trip-seat-class, .seat-class-row, tr");
+                            const tileB = b.closest(".single-seat-class, .trip-seat-class, .seat-class-row, tr");
+                            return extractSeatCountFromTile(tileB) - extractSeatCountFromTile(tileA);
+                        });
+                        bookNowBtn = enabledBtns[0];
+                    } else {
+                        bookNowBtn = validBookButtons[0];
+                    }
                 }
 
                 if (!bookNowBtn || bookNowBtn.disabled) {
@@ -648,13 +806,13 @@
                 onStatus("Opened seat map. Loading coaches...", "running");
 
                 let waitTries = 0;
-                while (!(card && card.querySelector("#select-bogie")) && waitTries < 60) {
-                    await sleep(150);
+                while (!(card && card.querySelector("#select-bogie")) && waitTries < 180) {
+                    await sleep(50);
                     waitTries++;
                 }
             }
 
-            // 3. Select coach with vacant seats (scoped strictly to target card)
+            // 3. Select coach with vacant seats (Zero-Switch Fast Path + Multi-Coach Contention Fallback)
             const bogieSelectUpdated = card ? card.querySelector("#select-bogie") : null;
             if (!bogieSelectUpdated) {
                 onStatus("Coach dropdown (#select-bogie) not found in target train card.", "error");
@@ -663,11 +821,11 @@
 
             const options = Array.from(bogieSelectUpdated.options)
                 .filter((o) => {
-                    const text = (o.text || "").trim().toLowerCase();
+                    const text = (o.text || o.textContent || "").trim().toLowerCase();
                     return text && !text.includes("select coach") && !text.includes("বগি নির্বাচন");
                 })
                 .map((o) => {
-                    const text = o.text.trim();
+                    const text = (o.text || o.textContent || "").trim();
                     const m =
                         text.match(/([A-Z0-9_\u0980-\u09FF]+)\s*(?:-|:)\s*(\d+)\s*Seat/i) ||
                         text.match(/([A-Z0-9_\u0980-\u09FF]+)\s*\((\d+)\)/i);
@@ -694,10 +852,7 @@
             // Capable coaches must accommodate full party size
             const capableCoaches = options.filter((o) => o.count >= seatsNeeded).sort((a, b) => b.count - a.count);
 
-            let targetCoach = null;
-            if (capableCoaches.length > 0) {
-                targetCoach = capableCoaches[0];
-            } else {
+            if (capableCoaches.length === 0) {
                 onStatus(
                     `Cannot accommodate full requested party of ${seatsNeeded} seat(s) in any single coach for this train. Stopped to avoid split/partial booking.`,
                     "error"
@@ -705,79 +860,118 @@
                 return false;
             }
 
-            if (bogieSelectUpdated.value !== targetCoach.value) {
-                onStatus(`Switching to Coach ${targetCoach.name} (${targetCoach.count} seats)...`, "running");
-                bogieSelectUpdated.value = targetCoach.value;
-                bogieSelectUpdated.dispatchEvent(new Event("change", { bubbles: true }));
-                bogieSelectUpdated.dispatchEvent(new Event("input", { bubbles: true }));
-                await sleep(800); // Wait for Angular to re-render coach seat layout
+            // Build ordered coach candidate queue:
+            // 1. Currently open coach (if capable) for 0ms zero-switch fast path
+            // 2. Anti-collision second-fullest coach (if buffer >= seatsNeeded + 1)
+            // 3. Remaining capable coaches (so if coach 1 has only green/held seats, we immediately switch to coach 2!)
+            const currentCoachOpt = capableCoaches.find((o) => o.value === bogieSelectUpdated.value);
+            const coachQueue = [];
+            if (currentCoachOpt) {
+                coachQueue.push(currentCoachOpt);
+            }
+            if (capableCoaches.length >= 2 && capableCoaches[1].count >= seatsNeeded + 1) {
+                if (!coachQueue.includes(capableCoaches[1])) coachQueue.push(capableCoaches[1]);
+            }
+            for (const c of capableCoaches) {
+                if (!coachQueue.includes(c)) coachQueue.push(c);
             }
 
-            // 4. Find available white seats in target coach (scoped to target card)
-            const seatMapContainer = (card && (card.querySelector(".seat-layout, .seat-plan, .seat-map, .bogie-seat-container") || card)) || document;
+            const seatMapContainer =
+                (card && (card.querySelector(".seat-layout, .seat-plan, .seat-map, .bogie-seat-container") || card)) ||
+                document;
 
-            // Reconcile already selected seats across the entire page
-            const allSelectedOnPage = Array.from(
-                document.querySelectorAll("button.btn-seat, button[data-seat], .seat-selected, [aria-selected='true']")
-            ).filter(isSeatSelected);
+            let targetCoach = null;
+            let availableSeats = [];
+            let neededClicks = seatsNeeded;
 
-            // Reconcile pre-existing foreign selections (outside target coach or outside target train)
-            const foreignSelections = allSelectedOnPage.filter((b) => {
-                const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
-                const inCoach = txt.startsWith(targetCoach.name + "-");
-                const inCard = card ? card.contains(b) : true;
-                return !inCoach || !inCard;
-            });
+            // Try up to 4 capable coaches in case the first coach's seats are green (seat-in-progress)
+            for (const candidateCoach of coachQueue.slice(0, 4)) {
+                if (bogieSelectUpdated.value !== candidateCoach.value) {
+                    onStatus(`Switching to Coach ${candidateCoach.name} (${candidateCoach.count} seats)...`, "running");
+                    bogieSelectUpdated.value = candidateCoach.value;
+                    bogieSelectUpdated.dispatchEvent(new Event("change", { bubbles: true }));
+                    bogieSelectUpdated.dispatchEvent(new Event("input", { bubbles: true }));
 
-            if (foreignSelections.length > 0) {
+                    let switchTries = 0;
+                    while (switchTries < 30) {
+                        await sleep(40);
+                        const rendered = Array.from(
+                            seatMapContainer.querySelectorAll("button.btn-seat, button[data-seat]")
+                        ).some((b) =>
+                            (b.textContent || b.getAttribute("data-seat") || "")
+                                .trim()
+                                .toUpperCase()
+                                .startsWith(candidateCoach.name + "-")
+                        );
+                        if (rendered) break;
+                        switchTries++;
+                    }
+                }
+
+                const allSelectedOnPage = Array.from(
+                    document.querySelectorAll("button.btn-seat, button[data-seat], .seat-selected, [aria-selected='true']")
+                ).filter(isSeatSelected);
+
+                const foreignSelections = allSelectedOnPage.filter((b) => {
+                    const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
+                    const inCoach = txt.startsWith(candidateCoach.name + "-");
+                    const inCard = card ? card.contains(b) : true;
+                    return !inCoach || !inCard;
+                });
+
+                if (foreignSelections.length > 0) {
+                    onStatus(
+                        `Pre-existing seat selection(s) detected outside Coach ${candidateCoach.name}. Stopped to avoid split/multi-coach booking.`,
+                        "error"
+                    );
+                    return false;
+                }
+
+                const alreadySelectedInCoach = allSelectedOnPage.filter((b) => {
+                    const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
+                    return txt.startsWith(candidateCoach.name + "-");
+                });
+
+                if (alreadySelectedInCoach.length > seatsNeeded) {
+                    onStatus(
+                        `Excess seats (${alreadySelectedInCoach.length}) already selected in Coach ${candidateCoach.name} (only ${seatsNeeded} requested). Stopped to prevent over-booking.`,
+                        "error"
+                    );
+                    return false;
+                }
+
+                neededClicks = seatsNeeded - alreadySelectedInCoach.length;
+                if (neededClicks === 0) {
+                    targetCoach = candidateCoach;
+                    break;
+                }
+
                 onStatus(
-                    `Pre-existing seat selection(s) detected outside Coach ${targetCoach.name}. Stopped to avoid split/multi-coach booking.`,
-                    "error"
+                    `Scanning vacant seats in Coach ${candidateCoach.name} (Need ${neededClicks} seat(s))...`,
+                    "running"
                 );
-                return false;
-            }
-
-            // Reconcile already selected seats in target coach
-            const alreadySelectedInCoach = allSelectedOnPage.filter((b) => {
-                const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
-                return txt.startsWith(targetCoach.name + "-");
-            });
-
-            if (alreadySelectedInCoach.length > seatsNeeded) {
-                onStatus(
-                    `Excess seats (${alreadySelectedInCoach.length}) already selected in Coach ${targetCoach.name} (only ${seatsNeeded} requested). Stopped to prevent over-booking.`,
-                    "error"
-                );
-                return false;
-            }
-
-            const neededClicks = seatsNeeded - alreadySelectedInCoach.length;
-            let seatsToClick = [];
-
-            if (neededClicks === 0) {
-                onStatus(`All ${seatsNeeded} requested seat(s) already selected in Coach ${targetCoach.name}.`, "running");
-            } else {
-                onStatus(`Scanning vacant seats in Coach ${targetCoach.name} (Need ${neededClicks} more seat(s))...`, "running");
-                let availableSeats = [];
+                let coachAvailable = [];
                 let scanTries = 0;
-                while (availableSeats.length < neededClicks && scanTries < 40) {
-                    const allSeatBtns = Array.from(seatMapContainer.querySelectorAll("button.btn-seat, button[data-seat]"));
-                    let coachScopedBtns = allSeatBtns.filter((b) => {
+                let renderedChecksAfterMount = 0;
+
+                while (coachAvailable.length < neededClicks && scanTries < 30) {
+                    const allSeatBtns = Array.from(
+                        seatMapContainer.querySelectorAll("button.btn-seat, button[data-seat]")
+                    );
+                    const coachScopedBtns = allSeatBtns.filter((b) => {
                         const txt = (b.textContent || b.getAttribute("data-seat") || "").trim().toUpperCase();
-                        return txt.startsWith(targetCoach.name + "-");
+                        return txt.startsWith(candidateCoach.name + "-");
                     });
 
-                    // Never fall back to allSeatBtns; wait for coach seat buttons to render
                     if (coachScopedBtns.length === 0) {
-                        await sleep(150);
+                        await sleep(40);
                         scanTries++;
                         continue;
                     }
 
-                    availableSeats = coachScopedBtns.filter((b) => {
+                    coachAvailable = coachScopedBtns.filter((b) => {
                         const cl = b.className || "";
                         const txt = (b.textContent || b.getAttribute("data-seat") || "").trim();
-                        // Require positive indication of availability
                         const isAvailableClass =
                             cl.includes("seat-available") ||
                             cl.includes("seat-white") ||
@@ -786,40 +980,89 @@
                         return isAvailableClass && isNotOccupied && !b.disabled && txt.length > 0;
                     });
 
-                    if (availableSeats.length >= neededClicks) break;
-                    await sleep(150);
+                    if (coachAvailable.length >= neededClicks) break;
+
+                    // Once coach buttons are mounted in DOM, don't stall for 2.4s if seats are green (seat-in-progress);
+                    // check at most 2 quick settle ticks (80ms) then move to the next capable coach!
+                    renderedChecksAfterMount++;
+                    if (renderedChecksAfterMount >= 2) break;
+                    await sleep(40);
                     scanTries++;
                 }
 
-                if (availableSeats.length < neededClicks) {
-                    onStatus(
-                        `Only found ${availableSeats.length} available seat(s) in Coach ${targetCoach.name} (needed ${neededClicks}). Stopped to prevent partial booking.`,
-                        "error"
-                    );
-                    return false;
+                if (coachAvailable.length >= neededClicks) {
+                    targetCoach = candidateCoach;
+                    availableSeats = coachAvailable;
+                    break;
                 }
 
-                seatsToClick = availableSeats.slice(0, neededClicks);
-                onStatus(`Selecting ${seatsToClick.length} seat(s) in Coach ${targetCoach.name}...`, "running");
+                onStatus(
+                    `Coach ${candidateCoach.name} has ${coachAvailable.length}/${neededClicks} white seat(s) (others held/green). Checking next coach...`,
+                    "running"
+                );
+            }
 
-                for (let i = 0; i < seatsToClick.length; i++) {
+            if (!targetCoach) {
+                onStatus(
+                    `No coach had ${neededClicks} clickable white seat(s) (remaining seats may be green/held in checkout).`,
+                    "error"
+                );
+                return false;
+            }
+
+            if (neededClicks === 0) {
+                onStatus(`All ${seatsNeeded} requested seat(s) already selected in Coach ${targetCoach.name}.`, "running");
+            } else {
+
+                // Pick anti-collision contiguous seats from middle-back (60% offset) instead of index 0
+                const primaryTargets = selectOptimalAvailableSeats(availableSeats, neededClicks);
+                const attemptedButtons = new Set(primaryTargets);
+                const fallbackPool = availableSeats.filter((b) => !attemptedButtons.has(b));
+                const queue = [...primaryTargets];
+                let fallbackRetriesLeft = 1; // Allow at most 1 replacement seat if a seat is sniped mid-click
+                let lockedInRun = 0;
+                let lastClickTimestamp = 0;
+
+                onStatus(`Selecting ${neededClicks} seat(s) in Coach ${targetCoach.name}...`, "running");
+
+                while (lockedInRun < neededClicks && queue.length > 0) {
                     const { remaining: curBudget } = await getRemainingBudget();
                     if (curBudget <= 0) {
                         onStatus("Click budget reached (16 clicks / 15 min). Stopped to prevent 1-hour account lockout.", "error");
                         return false;
                     }
 
-                    const seatBtn = seatsToClick[i];
+                    // Shohoz bot-protection pacing: space consecutive seat clicks by at least 220ms
+                    // so concurrent reserve-seat requests never trigger "Multiple order attempt detected"
+                    const sinceLastClick = Date.now() - lastClickTimestamp;
+                    if (lastClickTimestamp > 0 && sinceLastClick < 220) {
+                        await sleep(220 - sinceLastClick);
+                    }
+
+                    const seatBtn = queue.shift();
                     const seatLabel = (seatBtn.textContent || seatBtn.getAttribute("data-seat") || "").trim();
 
-                    onStatus(`Selecting seat ${seatLabel} (${i + 1}/${seatsToClick.length})...`, "running");
+                    // Re-verify button wasn't marked occupied while we selected the previous seat
+                    if (seatBtn.disabled || /seat-booked|seat-in-progress|booked|occupied/i.test(seatBtn.className || "")) {
+                        if (fallbackRetriesLeft > 0 && fallbackPool.length > 0) {
+                            fallbackRetriesLeft--;
+                            queue.push(fallbackPool.shift());
+                            continue;
+                        }
+                        onStatus(`Seat ${seatLabel} was just taken before click. Aborting to protect budget.`, "error");
+                        return false;
+                    }
+
+                    onStatus(`Selecting seat ${seatLabel} (${lockedInRun + 1}/${neededClicks})...`, "running");
+                    lastClickTimestamp = Date.now();
                     seatBtn.click();
                     await recordClick(seatLabel, "attempted");
 
-                    // Verify seat selection state
+                    // Fast 40ms reactive verification (up to 880ms)
                     let verified = false;
-                    for (let check = 0; check < 8; check++) {
-                        await sleep(150);
+                    let contested = false;
+                    for (let check = 0; check < 22; check++) {
+                        await sleep(40);
                         const cl = seatBtn.className || "";
                         if (
                             cl.includes("selected") ||
@@ -829,15 +1072,32 @@
                             verified = true;
                             break;
                         }
+                        if (/seat-booked|seat-in-progress/i.test(cl)) {
+                            contested = true;
+                            break;
+                        }
                     }
 
-                    if (!verified) {
+                    if (verified) {
+                        lockedInRun++;
+                    } else {
                         const alertMsg = autoDismissSweetAlerts();
                         if (alertMsg && alertMsg.includes("Multiple order attempt")) {
                             onStatus(`Shohoz lockout: ${alertMsg.slice(0, 60)}`, "error");
                             return false;
                         }
-                        onStatus(`Seat ${seatLabel} click was not registered as selected. Aborted to avoid mis-booking.`, "error");
+                        if (fallbackRetriesLeft > 0 && fallbackPool.length > 0) {
+                            fallbackRetriesLeft--;
+                            const replacement = fallbackPool.shift();
+                            const repLabel = (replacement.textContent || replacement.getAttribute("data-seat") || "").trim();
+                            onStatus(
+                                `Seat ${seatLabel} was ${contested ? "sniped" : "unresponsive"}; trying fallback ${repLabel}...`,
+                                "running"
+                            );
+                            queue.push(replacement);
+                            continue;
+                        }
+                        onStatus(`Seat ${seatLabel} was taken by another buyer. Aborted to protect click budget.`, "error");
                         return false;
                     }
                 }
@@ -871,30 +1131,36 @@
 
             // Consume one-shot intent now that exact seats are verified locked
             consumeBookingIntent();
+            sessionStorage.removeItem("trainsolo_sniper_armed");
+            isSniperArmed = false;
 
-            // 5. Click CONTINUE PURCHASE with precise matching
+            // 5. Click CONTINUE PURCHASE immediately (fast 40ms poll for button enablement instead of 300ms sleep)
             onStatus(`Seats locked (${seatsNeeded}/${seatsNeeded})! Clicking CONTINUE PURCHASE...`, "running");
-            await sleep(300);
 
-            const alertMsg = autoDismissSweetAlerts();
-            if (alertMsg && alertMsg.includes("Multiple order attempt")) {
-                onStatus(`Shohoz lockout: ${alertMsg.slice(0, 60)}`, "error");
-                return false;
+            let continueBtn = null;
+            for (let waitBtn = 0; waitBtn < 12; waitBtn++) {
+                const alertMsg = autoDismissSweetAlerts();
+                if (alertMsg && alertMsg.includes("Multiple order attempt")) {
+                    onStatus(`Shohoz lockout: ${alertMsg.slice(0, 60)}`, "error");
+                    return false;
+                }
+
+                continueBtn = Array.from(
+                    document.querySelectorAll("button, a, input[type='button'], input[type='submit']")
+                ).find((el) => {
+                    const txt = (el.textContent || el.value || "").trim().toLowerCase();
+                    const isPurchaseText =
+                        txt === "continue purchase" ||
+                        txt === "continue to purchase" ||
+                        txt.includes("continue purchase") ||
+                        txt.includes("continue to purchase") ||
+                        txt === "পরবর্তী ধাপ" ||
+                        txt.includes("পরবর্তী ধাপ");
+                    return isPurchaseText && !el.disabled;
+                });
+                if (continueBtn) break;
+                await sleep(40);
             }
-
-            const continueBtn = Array.from(
-                document.querySelectorAll("button, a, input[type='button'], input[type='submit']")
-            ).find((el) => {
-                const txt = (el.textContent || el.value || "").trim().toLowerCase();
-                const isPurchaseText =
-                    txt === "continue purchase" ||
-                    txt === "continue to purchase" ||
-                    txt.includes("continue purchase") ||
-                    txt.includes("continue to purchase") ||
-                    txt === "পরবর্তী ধাপ" ||
-                    txt.includes("পরবর্তী ধাপ");
-                return isPurchaseText && !el.disabled;
-            });
 
             if (!continueBtn) {
                 onStatus("Enabled CONTINUE PURCHASE button not found. Please click it manually.", "error");
@@ -904,9 +1170,9 @@
             continueBtn.click();
             onStatus("Pushed purchase! Waiting for OTP screen (/trip-info)...", "running");
 
-            // 6. Wait for OTP screen
+            // 6. Wait for OTP screen (80ms fast poll)
             let otpTries = 0;
-            while (otpTries < 60) {
+            while (otpTries < 180) {
                 const alertText = autoDismissSweetAlerts();
                 if (alertText && alertText.includes("Multiple order attempt")) {
                     onStatus(`Shohoz alert: ${alertText.slice(0, 60)}`, "error");
@@ -920,7 +1186,7 @@
                     if (firstOtp) firstOtp.focus();
                     return true;
                 }
-                await sleep(250);
+                await sleep(80);
                 otpTries++;
             }
 
@@ -986,11 +1252,28 @@
         });
     }
 
-    // In-page Floating HUD with interactive Train & Seat Selectors
+    // In-page Floating HUD with interactive Train, Class & Seat Selectors
+    let activePopulateTrainCards = () => {};
+
     async function injectHud() {
         if (document.getElementById("rail-assistant-hud")) return;
 
         currentTargetConfig = await getEffectiveBookingTarget();
+
+        const seatClasses = [
+            { value: "", label: "⚡ Any Class (Most Seats)" },
+            { value: "S_CHAIR", label: "S_CHAIR (Shovon Chair)" },
+            { value: "SNIGDHA", label: "SNIGDHA (AC Chair)" },
+            { value: "AC_S", label: "AC_S (AC Seat)" },
+            { value: "AC_B", label: "AC_B (AC Berth)" },
+            { value: "SHOVON", label: "SHOVON" },
+            { value: "F_SEAT", label: "F_SEAT (First Class Seat)" },
+            { value: "F_BERTH", label: "F_BERTH (First Class Berth)" },
+            { value: "F_CHAIR", label: "F_CHAIR (First Class Chair)" },
+        ];
+        const normalizedActiveClass =
+            currentTargetConfig.seatClass === "ANY" ? "" : (currentTargetConfig.seatClass || "").toUpperCase();
+        const initialTrainFilter = currentTargetConfig.trainNumber || currentTargetConfig.train || "";
 
         const hud = document.createElement("div");
         hud.id = "rail-assistant-hud";
@@ -1012,8 +1295,28 @@
                         <span class="hud-status-label" style="align-self: center;">Target Train:</span>
                     </div>
                     <select id="hudTrainSelect" class="hud-train-select">
-                        <option value="">⚡ Auto-Detect Best Train</option>
+                        <option value="">⚡ Auto-Detect Best Train (Any)</option>
                     </select>
+                    <input
+                        id="hudTrainFilterInput"
+                        type="text"
+                        class="hud-train-filter-input"
+                        placeholder="Pre-8AM train # or name (optional, e.g. 777)"
+                        value="${initialTrainFilter.replace(/"/g, "&quot;")}"
+                    />
+                    <div class="hud-status-row" style="margin-top: 6px;">
+                        <span class="hud-status-label" style="align-self: center;">Seat Class:</span>
+                        <select id="hudClassSelect" class="hud-class-select">
+                            ${seatClasses
+                                .map(
+                                    (sc) =>
+                                        `<option value="${sc.value}" ${
+                                            normalizedActiveClass === sc.value ? "selected" : ""
+                                        }>${sc.label}</option>`
+                                )
+                                .join("")}
+                        </select>
+                    </div>
                     <div class="hud-status-row" style="margin-top: 6px;">
                         <span class="hud-status-label" style="align-self: center;">Party Seats:</span>
                         <div class="hud-seat-pill-group" id="hudSeatPills">
@@ -1031,7 +1334,14 @@
                 <button class="hud-btn-primary" id="hudCutBtn">
                     <span>⚡ Auto-Cut Seat & Go to OTP</span>
                 </button>
-                <div class="hud-msg" id="hudMsg">Select train and seats above, then click Auto-Cut</div>
+                <button class="hud-btn-sniper ${isSniperArmed ? "armed" : ""}" id="hudSniperBtn" type="button">
+                    <span>${isSniperArmed ? "🛑 Disarm In-Page Drop Sniper" : "🎯 Arm In-Page Drop Sniper"}</span>
+                </button>
+                <div class="hud-msg" id="hudMsg">${
+                    isSniperArmed
+                        ? "🎯 Sniper Armed: Monitoring page for seat release..."
+                        : "Select train (or leave Auto-Detect) & click Auto-Cut or Arm Sniper"
+                }</div>
             </div>
         `;
         document.body.appendChild(hud);
@@ -1040,10 +1350,36 @@
         const hudBadge = document.getElementById("hudBadge");
         const hudRoute = document.getElementById("hudRoute");
         const hudTrainSelect = document.getElementById("hudTrainSelect");
+        const hudTrainFilterInput = document.getElementById("hudTrainFilterInput");
+        const hudClassSelect = document.getElementById("hudClassSelect");
         const hudSeatPills = document.getElementById("hudSeatPills");
         const hudBudget = document.getElementById("hudBudget");
         const hudCutBtn = document.getElementById("hudCutBtn");
+        const hudSniperBtn = document.getElementById("hudSniperBtn");
         const hudMsg = document.getElementById("hudMsg");
+
+        if (!hudHeader || !hudTrainSelect || !hudCutBtn || !hudSeatPills || !hudMsg || !hudBadge || !hudRoute || !hudBudget) {
+            return;
+        }
+
+        function persistHudConfig() {
+            const payload = {
+                train: currentTargetConfig.train || "",
+                train_number: currentTargetConfig.trainNumber || "",
+                trainNumber: currentTargetConfig.trainNumber || "",
+                seats: currentTargetConfig.seats || 1,
+                class: currentTargetConfig.seatClass || "",
+                seatClass: currentTargetConfig.seatClass || "",
+                hudOverride: true,
+                timestamp: Date.now(),
+            };
+            try {
+                sessionStorage.setItem("trainsolo_booking_target", JSON.stringify(payload));
+            } catch (_) {}
+            try {
+                chrome.storage.local.set({ trainsolo_booking_target: payload });
+            } catch (_) {}
+        }
 
         // Toggle minimize
         hudHeader.addEventListener("click", () => {
@@ -1076,14 +1412,7 @@
                 pill.classList.add("active");
                 const count = parseInt(pill.getAttribute("data-seats") || "1", 10);
                 currentTargetConfig.seats = count;
-                chrome.storage.local.set({
-                    trainsolo_booking_target: {
-                        ...currentTargetConfig,
-                        train_number: currentTargetConfig.trainNumber,
-                        class: currentTargetConfig.seatClass,
-                        timestamp: Date.now(),
-                    },
-                });
+                persistHudConfig();
                 hudMsg.textContent = `Party size updated to ${count} seat(s).`;
                 // Update in-card button labels
                 document.querySelectorAll(".trainsolo-in-card-btn").forEach((btn) => {
@@ -1095,15 +1424,48 @@
         let isUpdatingHud = false;
         let lastPopulatedHash = "";
 
+        function findReadyCardForSniper(cards) {
+            const seatsNeeded = currentTargetConfig.seats || 1;
+            const targetClass = currentTargetConfig.seatClass || "";
+            if (currentTargetConfig.train || currentTargetConfig.trainNumber) {
+                const matched = findTargetTrainCard(cards, currentTargetConfig.train, currentTargetConfig.trainNumber);
+                return matched && getCardSeatCapacity(matched, targetClass) >= seatsNeeded ? matched : null;
+            }
+            const capable = cards.filter((c) => getCardSeatCapacity(c, targetClass) >= seatsNeeded);
+            if (capable.length === 0) return null;
+            capable.sort((a, b) => getCardSeatCapacity(b, targetClass) - getCardSeatCapacity(a, targetClass));
+            return capable[0];
+        }
+
         // Populate train cards in dropdown and inject in-card buttons
         function populateTrainCards() {
             if (isUpdatingHud) return;
             const cards = Array.from(document.querySelectorAll(".single-trip-wrapper, .trip-wrapper"));
             if (cards.length === 0) return;
 
-            const cardsHash = cards
-                .map((c, idx) => `${cleanTrainCardTitle(c, `Train ${idx + 1}`)}:${getCardSeatCapacity(c, currentTargetConfig.seatClass)}`)
-                .join("|");
+            // If Sniper is armed and a matching card now has seats, trigger immediately on DOM render!
+            if (isSniperArmed && !isAutoCutRunning) {
+                const readyCard = findReadyCardForSniper(cards);
+                if (readyCard) {
+                    isSniperArmed = false;
+                    sessionStorage.removeItem("trainsolo_sniper_armed");
+                    if (sniperTimer) clearTimeout(sniperTimer);
+                    updateSniperUi();
+                    hudCutBtn.click();
+                }
+            }
+
+            // Do not wipe dropdown options while user is actively interacting with the <select>
+            if (document.activeElement === hudTrainSelect && hudTrainSelect.options.length > 1) {
+                injectInCardButtons();
+                return;
+            }
+
+            const cardsHash =
+                `${currentTargetConfig.train}|${currentTargetConfig.trainNumber}|${currentTargetConfig.seatClass}||` +
+                cards
+                    .map((c, idx) => `${cleanTrainCardTitle(c, `Train ${idx + 1}`)}:${getCardSeatCapacity(c, currentTargetConfig.seatClass)}`)
+                    .join("|");
 
             if (cardsHash === lastPopulatedHash && hudTrainSelect.options.length > 1) {
                 return; // Nothing changed, skip DOM re-population
@@ -1116,8 +1478,7 @@
                     hudTrainSelect.remove(1);
                 }
 
-                let bestCardOption = "";
-                let maxSeats = -1;
+                let matchedOptionValue = "";
 
                 cards.forEach((card, idx) => {
                     const title = cleanTrainCardTitle(card, `Train ${idx + 1}`);
@@ -1129,26 +1490,23 @@
                     opt.textContent = `🚆 ${title} (${capacity} seats)`;
                     hudTrainSelect.appendChild(opt);
 
-                    if (capacity > maxSeats) {
-                        maxSeats = capacity;
-                        bestCardOption = opt.value;
-                    }
-
                     // Check if this card matches user's configured target
                     if (
                         (currentTargetConfig.trainNumber && num === currentTargetConfig.trainNumber) ||
                         (currentTargetConfig.train && title.toUpperCase().includes(currentTargetConfig.train))
                     ) {
                         opt.selected = true;
+                        matchedOptionValue = opt.value;
                     }
                 });
 
-                // Only pre-select best inventory train if user did NOT specify an explicit train target
                 const hasExplicitTarget = Boolean(currentTargetConfig.train || currentTargetConfig.trainNumber);
-                if (!hasExplicitTarget && !hudTrainSelect.value && bestCardOption) {
-                    hudTrainSelect.value = bestCardOption;
-                } else if (hasExplicitTarget && !hudTrainSelect.value) {
-                    hudMsg.textContent = `Target train "${currentTargetConfig.train || currentTargetConfig.trainNumber}" not found in current search results.`;
+                if (!hasExplicitTarget) {
+                    // Keep Auto-Detect Best Train (value="") selected so Sniper/Auto-Cut picks highest capacity train dynamically
+                    hudTrainSelect.value = "";
+                } else if (!matchedOptionValue) {
+                    hudTrainSelect.value = "";
+                    hudMsg.textContent = `Target train "${currentTargetConfig.train || currentTargetConfig.trainNumber}" not in results yet.`;
                 }
 
                 lastPopulatedHash = cardsHash;
@@ -1157,13 +1515,13 @@
                 isUpdatingHud = false;
             }
         }
+        activePopulateTrainCards = populateTrainCards;
 
-        // Run population once cards load
-        let checkCardsInterval = setInterval(() => {
+        // Run population periodically so cards appearing at 8:00 AM are always picked up
+        setInterval(() => {
             const cards = document.querySelectorAll(".single-trip-wrapper, .trip-wrapper");
             if (cards.length > 0) {
                 populateTrainCards();
-                clearInterval(checkCardsInterval);
             }
         }, 300);
 
@@ -1216,15 +1574,27 @@
             if (debounceTimer) clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
                 populateTrainCards();
-            }, 600);
+            }, 120);
         });
         domObserver.observe(document.body, { childList: true, subtree: true });
 
         // Train Select Change Handler
         hudTrainSelect.addEventListener("change", () => {
             const val = hudTrainSelect.value;
-            currentTargetConfig.train = val.replace(/^train_num_/, "");
+            if (!val) {
+                currentTargetConfig.train = "";
+                currentTargetConfig.trainNumber = "";
+                if (hudTrainFilterInput) hudTrainFilterInput.value = "";
+                persistHudConfig();
+                hudMsg.textContent = "Target set to ⚡ Auto-Detect Best Train (highest available seats).";
+                return;
+            }
+            currentTargetConfig.train = val.replace(/^train_num_/, "").toUpperCase();
             currentTargetConfig.trainNumber = val.startsWith("train_num_") ? val.replace("train_num_", "") : "";
+            if (hudTrainFilterInput) {
+                hudTrainFilterInput.value = currentTargetConfig.trainNumber || currentTargetConfig.train;
+            }
+            persistHudConfig();
             const matchedCard = findTargetTrainCard(
                 Array.from(document.querySelectorAll(".single-trip-wrapper, .trip-wrapper")),
                 currentTargetConfig.train,
@@ -1236,6 +1606,41 @@
                 matchedCard.style.boxShadow = "0 0 25px rgba(22, 163, 74, 0.5)";
             }
         });
+
+        // Pre-8AM Train Filter Input Handler (works even when 0 trains are rendered before 8:00 AM)
+        if (hudTrainFilterInput) {
+            hudTrainFilterInput.addEventListener("input", () => {
+                const raw = (hudTrainFilterInput.value || "").trim().toUpperCase();
+                if (!raw) {
+                    currentTargetConfig.train = "";
+                    currentTargetConfig.trainNumber = "";
+                    hudTrainSelect.value = "";
+                    persistHudConfig();
+                    hudMsg.textContent = "Pre-8AM filter cleared: ⚡ Auto-Detect Best Train active.";
+                    return;
+                }
+                const numMatch = raw.match(/\b(\d{3,4})\b/);
+                currentTargetConfig.trainNumber = numMatch ? numMatch[1] : "";
+                currentTargetConfig.train = raw;
+                persistHudConfig();
+                lastPopulatedHash = "";
+                populateTrainCards();
+                hudMsg.textContent = `Target locked to "${raw}" (ready for 8:00 AM drop).`;
+            });
+        }
+
+        // Seat Class Select Handler
+        if (hudClassSelect) {
+            hudClassSelect.addEventListener("change", () => {
+                currentTargetConfig.seatClass = (hudClassSelect.value || "").toUpperCase();
+                persistHudConfig();
+                lastPopulatedHash = "";
+                populateTrainCards();
+                hudMsg.textContent = currentTargetConfig.seatClass
+                    ? `Seat class locked to ${currentTargetConfig.seatClass}.`
+                    : "Seat class set to ⚡ Any Class (highest available seats).";
+            });
+        }
 
         // Auto-cut button click handler
         hudCutBtn.addEventListener("click", async () => {
@@ -1268,19 +1673,106 @@
                 hudCutBtn.disabled = false;
             }
         });
+
+        function updateSniperUi() {
+            if (!hudSniperBtn) return;
+            if (isSniperArmed) {
+                hudSniperBtn.classList.add("armed");
+                hudSniperBtn.innerHTML = "<span>🛑 Disarm In-Page Drop Sniper</span>";
+                hudBadge.textContent = "Sniper Armed";
+                hudBadge.style.background = "#d97706";
+            } else {
+                hudSniperBtn.classList.remove("armed");
+                hudSniperBtn.innerHTML = "<span>🎯 Arm In-Page Drop Sniper</span>";
+                if (hudBadge.textContent === "Sniper Armed") {
+                    hudBadge.textContent = "Ready";
+                    hudBadge.style.background = "#22c55e";
+                }
+            }
+        }
+
+        function scheduleNextSniperCheck() {
+            if (sniperTimer) clearTimeout(sniperTimer);
+            if (!isSniperArmed) return;
+
+            // Bot-safe interval: 2.6s + jitter during 8:00 AM / 2:00 PM drop windows, 3.4s + jitter otherwise
+            const now = new Date();
+            const bstMs = now.getTime() + (now.getTimezoneOffset() + 360) * 60000;
+            const bst = new Date(bstMs);
+            const h = bst.getHours();
+            const m = bst.getMinutes();
+            const s = bst.getSeconds();
+            const inDropWindow =
+                ((h === 7 || h === 13) && m === 59 && s >= 54) ||
+                ((h === 8 || h === 14) && m === 0 && s <= 50);
+
+            const baseDelay = inDropWindow ? 2600 : 3400;
+            const jitter = Math.floor(Math.random() * 350);
+
+            sniperTimer = setTimeout(async () => {
+                if (!isSniperArmed || isAutoCutRunning) return;
+
+                const cards = Array.from(document.querySelectorAll(".single-trip-wrapper, .trip-wrapper"));
+                const targetCard = findReadyCardForSniper(cards);
+
+                if (targetCard) {
+                    isSniperArmed = false;
+                    sessionStorage.removeItem("trainsolo_sniper_armed");
+                    updateSniperUi();
+                    hudCutBtn.click();
+                    return;
+                }
+
+                const targetDesc =
+                    currentTargetConfig.train || currentTargetConfig.trainNumber
+                        ? `train "${currentTargetConfig.train || currentTargetConfig.trainNumber}"`
+                        : "any available train";
+                hudMsg.textContent = `🎯 Sniper active (${targetDesc}): Refreshing search (${((baseDelay + jitter) / 1000).toFixed(1)}s)...`;
+                hudMsg.className = "hud-msg running";
+                await triggerInPageSearchRefresh();
+                scheduleNextSniperCheck();
+            }, baseDelay + jitter);
+        }
+
+        if (hudSniperBtn) {
+            updateSniperUi();
+            if (isSniperArmed) {
+                scheduleNextSniperCheck();
+            }
+
+            hudSniperBtn.addEventListener("click", () => {
+                isSniperArmed = !isSniperArmed;
+                if (isSniperArmed) {
+                    sessionStorage.setItem("trainsolo_sniper_armed", "1");
+                    hudMsg.textContent = "🎯 In-Page Drop Sniper armed! Will auto-cut the instant seats unlock.";
+                    hudMsg.className = "hud-msg running";
+                    updateSniperUi();
+                    scheduleNextSniperCheck();
+                } else {
+                    sessionStorage.removeItem("trainsolo_sniper_armed");
+                    if (sniperTimer) clearTimeout(sniperTimer);
+                    hudMsg.textContent = "In-Page Drop Sniper disarmed.";
+                    hudMsg.className = "hud-msg";
+                    updateSniperUi();
+                }
+            });
+        }
     }
 
-    // Auto-trigger if URL has #autocut=1 or ?autocut=1 or storage says autocut
+    // Auto-trigger if URL has #autocut=1 or ?autocut=1 or storage says autocut (fast 50ms reactive poll)
     async function checkAutoTrigger() {
         const target = await getEffectiveBookingTarget();
-        if (target.autoCut) {
-            console.log("[TrainSolo] Auto-cut trigger active! Waiting for train cards...");
+        if (target.autoCut || isSniperArmed) {
+            console.log("[TrainSolo] Auto-cut / Sniper trigger active! Waiting for train cards...");
             let attempts = 0;
             const initInterval = setInterval(() => {
                 attempts++;
                 const cards = document.querySelectorAll(".single-trip-wrapper, .trip-wrapper");
-                if (cards.length > 0 || attempts >= 40) {
+                if (cards.length > 0 || attempts >= 160) {
                     clearInterval(initInterval);
+                    if (cards.length === 0 && isSniperArmed) {
+                        return; // Let scheduleNextSniperCheck handle periodic refresh when 0 cards rendered
+                    }
                     const hudCutBtn = document.getElementById("hudCutBtn");
                     if (hudCutBtn && !hudCutBtn.disabled) {
                         hudCutBtn.click();
@@ -1294,11 +1786,11 @@
                         });
                     }
                 }
-            }, 250);
+            }, 50);
         }
     }
 
-    // Message Listener for Popup triggering
+    // Message Listener for Popup & Warm-Tab Background Dispatch
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === "AUTO_CUT_SEAT") {
             const hudMsg = document.getElementById("hudMsg");
@@ -1310,6 +1802,50 @@
             })
                 .then((success) => sendResponse({ success: Boolean(success) }))
                 .catch((err) => sendResponse({ success: false, error: err?.message || String(err) }));
+            return true;
+        }
+        if (request.action === "WARM_DISPATCH_AUTOCUT") {
+            sendResponse({ accepted: true });
+            (async () => {
+                if (request.target) {
+                    sessionStorage.setItem("trainsolo_booking_target", JSON.stringify(request.target));
+                    currentTargetConfig = {
+                        train: (request.target.train || "").toUpperCase(),
+                        trainNumber: request.target.train_number || request.target.trainNumber || "",
+                        seats: Math.min(4, Math.max(1, request.target.seats || 1)),
+                        seatClass: (request.target.class || request.target.seatClass || "").toUpperCase(),
+                    };
+                }
+
+                const cards = Array.from(document.querySelectorAll(".single-trip-wrapper, .trip-wrapper"));
+                const targetCard =
+                    currentTargetConfig.train || currentTargetConfig.trainNumber
+                        ? findTargetTrainCard(cards, currentTargetConfig.train, currentTargetConfig.trainNumber)
+                        : cards[0];
+
+                const hasSeatsNow =
+                    targetCard && getCardSeatCapacity(targetCard, currentTargetConfig.seatClass) >= currentTargetConfig.seats;
+
+                const hudMsg = document.getElementById("hudMsg");
+                if (cards.length > 0 && hasSeatsNow) {
+                    // Warm tab already has the train card and seats rendered — 0ms cut!
+                    runAutoCut((msg, type) => {
+                        if (hudMsg) {
+                            hudMsg.textContent = msg;
+                            hudMsg.className = `hud-msg ${type}`;
+                        }
+                    }, targetCard);
+                } else {
+                    // Warm tab was on pre-drop empty screen — refresh search in-page and auto-cut immediately on render
+                    if (hudMsg) {
+                        hudMsg.textContent = "⚡ Warm tab activated! Refreshing train inventory for instant Auto-Cut...";
+                        hudMsg.className = "hud-msg running";
+                    }
+                    await triggerInPageSearchRefresh();
+                    await sleep(150);
+                    checkAutoTrigger();
+                }
+            })();
             return true;
         }
         if (request.action === "PING") {
@@ -1341,6 +1877,23 @@
             check();
             setTimeout(check, 600);
         }
+    }
+
+    // Expose internal functions for automated Vitest DOM reality testing
+    if (typeof globalThis !== "undefined" && globalThis.__TRAINSOLO_ENABLE_TEST_API__) {
+        globalThis.__TRAINSOLO_TEST_API__ = {
+            getCardSeatCapacity,
+            matchesSeatClass,
+            findTargetTrainCard,
+            selectOptimalAvailableSeats,
+            runAutoCut,
+            injectHud,
+            populateTrainCards: () => activePopulateTrainCards(),
+            setTargetConfig: (cfg) => {
+                currentTargetConfig = { ...currentTargetConfig, ...cfg };
+            },
+            getTargetConfig: () => ({ ...currentTargetConfig }),
+        };
     }
 
     // Initialize HUD on railway search and booking pages

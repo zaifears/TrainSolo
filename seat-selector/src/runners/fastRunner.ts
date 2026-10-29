@@ -182,7 +182,10 @@ export class FastRunner {
       });
       const isPref = (name: string) => preferred.some(p => p.toUpperCase() === name);
       const enough = opts.filter(o => o.count >= need);
-      const target = enough.find(o => isPref(o.name)) || enough[0]
+      const currentOpen = enough.find(o => o.value === sel.value);
+      const target = enough.find(o => isPref(o.name))
+        || currentOpen
+        || enough[0]
         || [...opts].sort((a, b) => b.count - a.count).find(o => o.count > 0);
       if (!target) return { opts, target: null, switched: false };
       const switched = sel.value !== target.value;
